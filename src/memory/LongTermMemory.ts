@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 import { dirname } from 'path';
 import { mkdirSync } from 'fs';
 import { MemoryEntry, MemoryCategory } from '../types/memory.js';
@@ -8,9 +8,10 @@ import { KyberEvents } from '../types/events.js';
 /**
  * [R1.4] LongTermMemory (L3) - Persistent SQLite-based cross-session store.
  * [CC-Aligned]: Stores structured knowledge with category indexing.
+ * Uses bun:sqlite for native compatibility.
  */
 export class LongTermMemory {
-  private readonly db: Database.Database;
+  private readonly db: Database;
 
   constructor(
     dbPath: string,
@@ -91,7 +92,7 @@ export class LongTermMemory {
       )
     `).run(maxEntries);
 
-    const totalEvicted = ageResult.changes + countResult.changes;
+    const totalEvicted = (ageResult as any).changes + (countResult as any).changes;
     if (totalEvicted > 0) {
       this.eventBus.emit('memory.evicted', { 
         tierId: 'L3', 

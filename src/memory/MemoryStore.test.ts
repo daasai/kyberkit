@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { MemoryStore } from './MemoryStore.js';
 import { TypedEventBus } from '../events/EventBus.js';
 import { KyberEvents } from '../types/events.js';
@@ -36,7 +36,7 @@ describe('MemoryStore', () => {
   });
 
   it('should trigger session flush on tool calls', async () => {
-    const spy = vi.fn();
+    const spy = mock(() => {});
     eventBus.on('memory.session_flushed', spy);
 
     await store.learn('project', 'Project X started.');

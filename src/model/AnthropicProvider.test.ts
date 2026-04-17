@@ -1,10 +1,22 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
 import { AnthropicProvider } from './AnthropicProvider.js';
-import { ChatRequest, MessageContent } from '../types/model.js';
+import { ChatRequest, MessageContent, StreamEvent } from '../types/model.js';
 import { ToolDefinition } from '../types/tool.js';
 import { z } from 'zod';
 
+let mockStreamEvents: unknown[] = [];
+
 const mockCreateMessages = mock(async (params: any) => {
+  if (params.stream) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const event of mockStreamEvents) {
+          yield event;
+        }
+      }
+    };
+  }
+
   return {
     role: 'assistant',
     content: [{ type: 'text', text: 'Hello KyberKit!' }],
@@ -30,6 +42,7 @@ describe('AnthropicProvider (M5)', () => {
   beforeEach(() => {
     provider = new AnthropicProvider({ apiKey: 'test-key' });
     mockCreateMessages.mockClear();
+    mockStreamEvents = [];
   });
 
   it('should initialize with correct capabilities', () => {
@@ -81,5 +94,169 @@ describe('AnthropicProvider (M5)', () => {
     const content: MessageContent = { type: 'text', text: 'Count this text' };
     const tokens = await provider.countTokens(content);
     expect(tokens).toBe(42); // Mocked response
+  });
+
+  it('should stream text deltas and final usage', async () => {
+    mockStreamEvents = [
+      {
+        type: 'message_start',
+        message: {
+          usage: {
+            input_tokens: 11,
+            cache_creation_input_tokens: 7,
+            cache_read_input_tokens: 3
+          }
+        }
+      },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Hello' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: ' world' }
+      },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn' },
+        usage: { output_tokens: 9 }
+      },
+      { type: 'message_stop' }
+    ];
+
+    const request: ChatRequest = {
+      model: 'claude-haiku-35-20241022',
+      messages: [{ role: 'user', content: 'hi' }],
+    };
+
+    const events: StreamEvent[] = [];
+    for await (const event of provider.chatStream(request)) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: 'text_delta', text: 'Hello' },
+      { type: 'text_delta', text: ' world' },
+      { type: 'message_stop', stopReason: 'end_turn' },
+      {
+        type: 'usage',
+        usage: {
+          inputTokens: 11,
+          outputTokens: 9,
+          cacheCreationTokens: 7,
+          cacheReadTokens: 3
+        }
+      }
+    ]);
+  });
+
+  it('should stream tool use input fragments and map tool_use stop reason', async () => {
+    mockStreamEvents = [
+      {
+        type: 'message_start',
+        message: { usage: { input_tokens: 5 } }
+      },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'tool_1', name: 'get_weather' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"city":"' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: 'NYC"}' }
+      },
+      { type: 'content_block_stop', index: 0 },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'tool_use' },
+        usage: { output_tokens: 4 }
+      },
+      { type: 'message_stop' }
+    ];
+
+    const request: ChatRequest = {
+      model: 'claude-haiku-35-20241022',
+      messages: [{ role: 'user', content: 'weather?' }],
+    };
+
+    const events: StreamEvent[] = [];
+    for await (const event of provider.chatStream(request)) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: 'tool_use_start', id: 'tool_1', name: 'get_weather' },
+      { type: 'tool_use_input', id: 'tool_1', inputFragment: '{"city":"' },
+      { type: 'tool_use_input', id: 'tool_1', inputFragment: 'NYC"}' },
+      { type: 'tool_use_stop', id: 'tool_1' },
+      { type: 'message_stop', stopReason: 'tool_use' },
+      { type: 'usage', usage: { inputTokens: 5, outputTokens: 4 } }
+    ]);
+  });
+
+  it('should stream thinking deltas and preserve usage fields', async () => {
+    mockStreamEvents = [
+      {
+        type: 'message_start',
+        message: {
+          usage: {
+            input_tokens: 13,
+            cache_creation_input_tokens: 2
+          }
+        }
+      },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'thinking' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'reasoning...' }
+      },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'max_tokens' },
+        usage: { output_tokens: 8 }
+      },
+      { type: 'message_stop' }
+    ];
+
+    const request: ChatRequest = {
+      model: 'claude-haiku-35-20241022',
+      messages: [{ role: 'user', content: 'think' }],
+    };
+
+    const events: StreamEvent[] = [];
+    for await (const event of provider.chatStream(request)) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: 'thinking_delta', text: 'reasoning...' },
+      { type: 'message_stop', stopReason: 'max_tokens' },
+      {
+        type: 'usage',
+        usage: {
+          inputTokens: 13,
+          outputTokens: 8,
+          cacheCreationTokens: 2
+        }
+      }
+    ]);
   });
 });

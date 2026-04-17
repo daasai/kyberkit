@@ -3,17 +3,36 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "kyberkit": "bin/kyberkit"
+  },
+  "scripts": {
+    "test": "bun test",
+    "test:live:sprint2": "KYBER_RUN_LIVE_TESTS=true bun test src/runtime/Sprint2Live.integration.test.ts",
+    "demo:sprint2": "bun run scripts/sprint2-workspace-demo.ts",
+    "repl-test": "bun run scripts/repl-test.ts",
+    "stream-test": "bun run scripts/stream-test.ts",
+    "chat": "bun run bin/kyberkit chat",
+    "chat:no-tui": "bun run bin/kyberkit chat --no-tui"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "^12.9.0",
+    "gray-matter": "^4.0.3",
+    "ink": "^7.0.1",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.5",
     "yaml": "^2.8.3",
     "zod": "^4.3.6",
     "zod-to-json-schema": "^3.23.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/react": "^19.2.14",
     "bun-types": "latest",
+    "ink-testing-library": "^4.0.0",
     "typescript": "^5.0.0",
     "vitest": "^4.1.2"
   }

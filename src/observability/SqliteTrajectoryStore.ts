@@ -1,8 +1,11 @@
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 import { TrajectoryStore, TrajectoryEvent } from '../types/observability.js';
 
+/**
+ * SQLite-backed trajectory store using bun:sqlite for native compatibility.
+ */
 export class SqliteTrajectoryStore implements TrajectoryStore {
-  private readonly db: Database.Database;
+  private readonly db: Database;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -68,7 +71,7 @@ export class SqliteTrajectoryStore implements TrajectoryStore {
   async prune(retentionMs: number): Promise<number> {
     const cutoff = Date.now() - retentionMs;
     const result = this.db.prepare('DELETE FROM trajectories WHERE timestamp < ?').run(cutoff);
-    return result.changes;
+    return (result as any).changes;
   }
 
   private rowToEvent(row: any): TrajectoryEvent {

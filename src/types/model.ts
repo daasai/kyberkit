@@ -23,18 +23,29 @@ export interface ChatRequest {
 export interface ChatResponse {
   role: 'assistant';
   content: Array<MessageContent>;
-  stopReason?: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use';
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-  };
+  stopReason: StopReason;
+  usage: UsageInfo;
 }
 
-export interface ChatStreamChunk {
-  type: 'text_delta' | 'tool_use_start' | 'tool_use_delta' | 'message_stop';
-  text?: string;
-  toolUse?: { id: string; name: string; inputFragment: string };
+export interface UsageInfo {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
 }
+
+export type StopReason = 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use';
+
+export type StreamEvent =
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_use_start'; id: string; name: string }
+  | { type: 'tool_use_input'; id: string; inputFragment: string }
+  | { type: 'tool_use_stop'; id: string }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'message_stop'; stopReason: StopReason }
+  | { type: 'usage'; usage: UsageInfo };
+
+
 
 export interface ModelCapabilities {
   maxContextTokens: number;
@@ -49,7 +60,7 @@ export interface ModelProvider {
   readonly supportedModels: string[];
   
   chat(request: ChatRequest): Promise<ChatResponse>;
-  chatStream(request: ChatRequest): AsyncIterable<ChatStreamChunk>;
+  chatStream(request: ChatRequest): AsyncIterable<StreamEvent>;
   capabilities(): ModelCapabilities;
   countTokens(content: MessageContent | string): Promise<number>;
 }

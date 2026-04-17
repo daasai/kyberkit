@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { SqliteTrajectoryStore } from './SqliteTrajectoryStore.js';
 import { TrajectoryEvent } from '../types/observability.js';
-import Database from 'better-sqlite3';
 import { join } from 'path';
 import { rmSync, mkdirSync } from 'fs';
+
 
 describe('SqliteTrajectoryStore (Red Phase)', () => {
   const testDir = './test-observability-data';

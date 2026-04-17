@@ -1,6 +1,6 @@
 import { DefaultAgentInstance } from './AgentInstance.js';
 import { isTerminal } from './AgentStateMachine.js';
-import { ModelProvider, MessageContent } from '../types/model.js';
+import { ModelProvider, MessageContent, StreamEvent, StopReason } from '../types/model.js';
 import { ToolIntegrationFacade, ToolDefinition } from '../types/tool.js';
 import { PermissionSandbox } from '../permission/PermissionSandbox.js';
 import { ToolValidationError, PermissionDeniedError, ToolExecutionError, ModelError } from '../types/errors.js';
@@ -8,7 +8,12 @@ import { MemoryStore } from '../memory/MemoryStore.js';
 import { CheckpointManager } from '../checkpoint/CheckpointManager.js';
 import { ExceptionHandler } from '../exception/ExceptionHandler.js';
 import { VerificationPipeline } from '../validation/VerificationPipeline.js';
-import { withRetry } from '../exception/RetryStrategy.js';
+import { AgentEvent } from '../types/agent-events.js';
+import { MiddlewarePipeline, MiddlewareContext, createMiddlewareContext } from './StreamMiddleware.js';
+import { TokenCounterMiddleware } from './middleware/TokenCounterMiddleware.js';
+import { ContentAccumulatorMiddleware } from './middleware/ContentAccumulatorMiddleware.js';
+import { ToolDispatcherMiddleware } from './middleware/ToolDispatcherMiddleware.js';
+import { StreamEventMapper } from './StreamEventMapper.js';
 
 export interface ReliabilityLayer {
   memory: MemoryStore;
@@ -17,9 +22,224 @@ export interface ReliabilityLayer {
   verification: VerificationPipeline;
 }
 
+export interface AgentLoopDeps {
+  agent: DefaultAgentInstance;
+  model: ModelProvider;
+  tools: ToolIntegrationFacade;
+  sandbox: PermissionSandbox;
+  pipeline: MiddlewarePipeline;
+  reliability: ReliabilityLayer;
+  // Sprint 2: Optional dynamic prompt assembly
+  promptAssembler?: import('../prompt/PromptAssembler.js').PromptAssembler;
+  // Sprint 2: Optional slash command system
+  commandRegistry?: import('../commands/CommandRegistry.js').CommandRegistry;
+  // Sprint 2: Workspace context
+  workspace?: import('../runtime/WorkspaceInstance.js').WorkspaceInstance;
+}
+
+
+
+
 /**
- * [Phase 1 Integration] runAgentLoop with Reliability Layer.
- * Injects Memory, Checkpoints, Retries, and Verification into the kernel loop.
+ * Core Agent Loop — async generator that yields AgentEvents.
+ *
+ * Architecture (per turn):
+ *   1. [Checkpoint] Save state
+ *   2. [Sense] Collect memory context
+ *   3. [Think] Stream LLM response through middleware pipeline
+ *   4. [Act] If tool_use → dispatch tools, add results to messages
+ *   5. [Verify] If end_turn → run verification pipeline
+ *   6. yield TurnCompleteEvent
+ */
+export async function* agentLoop(
+  deps: AgentLoopDeps,
+): AsyncGenerator<AgentEvent, void, void> {
+  const { agent, model, tools, sandbox, pipeline, reliability } = deps;
+  const toolDispatcher = new ToolDispatcherMiddleware(tools, sandbox);
+  const context = createMiddlewareContext(agent);
+  const mapper = new StreamEventMapper();
+
+  while (!isTerminal(agent.status) && agent.status === 'running') {
+    context.turnNumber++;
+    context.accumulatedContent = [];
+    context.pendingToolUses = [];
+    context.stopReason = null;
+    mapper.reset();
+
+    // 1. Checkpoint
+    await reliability.checkpoint.save(agent as any, (reliability.memory as any).l2);
+
+    // 2. Sense: memory context
+    const memoryContext = reliability.memory.getContext();
+
+    // 3. Assemble System Prompt
+    let systemPrompt: string;
+    if (deps.promptAssembler) {
+      const assembled = await deps.promptAssembler.assemble({
+        budget: 30000,
+        cwd: process.cwd(),
+        tools: tools.listAll().map(t => ({ 
+          name: t.name, 
+          description: t.description || '', 
+          inputSchema: t.inputSchema 
+        })),
+        memoryContext,
+        assets: deps.workspace?.assets?.getManifest?.() || undefined,
+        workspaceConfig: deps.workspace?.config,
+        reliability
+      });
+      systemPrompt = assembled.text;
+    } else {
+      systemPrompt = `${agent.definition.systemPrompt ?? ''}\n\n${memoryContext}`;
+    }
+
+    // [New Step] Intercept / commands
+    if (deps.commandRegistry) {
+      const lastMessage = agent.messages[agent.messages.length - 1];
+      if (lastMessage && lastMessage.role === 'user' && typeof lastMessage.content === 'string' && deps.commandRegistry.isCommand(lastMessage.content)) {
+        const cmdResult = await deps.commandRegistry.execute(lastMessage.content, {
+          cumulative: context.cumulative,
+          cwd: process.cwd(),
+          assets: deps.workspace?.assets?.getManifest?.() || undefined,
+        });
+
+
+
+        yield { type: 'text_delta', text: cmdResult.output };
+        
+        if (!cmdResult.continueConversation) {
+          agent.addMessage('assistant', [{ type: 'text', text: cmdResult.output }]);
+          yield { 
+            type: 'turn_complete', 
+            turnNumber: context.turnNumber, 
+            stopReason: 'end_turn', 
+            content: [{ type: 'text', text: cmdResult.output }] 
+          };
+          context.cumulative.turnCount++;
+          break; // End this local command turn without completing the agent lifecycle
+        }
+      }
+    }
+
+    try {
+      // 4. Think: Stream LLM response
+      let currentStopReason: StopReason = 'end_turn';
+
+      const stream = model.chatStream({
+        model: agent.definition.model,
+        systemPrompt,
+        messages: agent.messages as any,
+        tools: tools.listAll(),
+      });
+
+
+      for await (const streamEvent of stream) {
+        // Capture stop reason from message_stop
+        if (streamEvent.type === 'message_stop') {
+          currentStopReason = streamEvent.stopReason;
+          context.stopReason = currentStopReason;
+          continue;
+        }
+
+        // D3 fix: Use StreamEventMapper for unified mapping + enrichment
+        const agentEvent = mapper.mapEvent(streamEvent);
+        if (!agentEvent) continue;
+
+        // Process through middleware pipeline
+        const processedEvents = pipeline.process(agentEvent, context);
+        for (const pe of processedEvents) {
+          yield pe;
+        }
+      }
+
+      // Record success
+      reliability.exceptionHandler.recordSuccess('model');
+
+      // Emit turn_complete through pipeline to trigger ContentAccumulator flush
+      const turnCompleteEvent: AgentEvent = {
+        type: 'turn_complete',
+        turnNumber: context.turnNumber,
+        stopReason: currentStopReason,
+        content: [],
+      };
+      const tcProcessed = pipeline.process(turnCompleteEvent, context);
+
+      // Record assistant message from accumulated content
+      if (context.accumulatedContent.length > 0) {
+        agent.addMessage('assistant', context.accumulatedContent);
+      }
+
+      // 5. Act: If tool_use, dispatch tools
+      if (currentStopReason === 'tool_use' && context.pendingToolUses.length > 0) {
+        reliability.memory.recordToolCall();
+
+        const toolResults: MessageContent[] = [];
+        for await (const result of toolDispatcher.dispatchTools(
+          context.pendingToolUses,
+          agent.context,
+        )) {
+          yield result;
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: result.toolUseId,
+            content: result.result,
+            is_error: result.isError,
+          });
+        }
+
+        if (toolResults.length > 0) {
+          agent.addMessage('user', toolResults);
+        }
+      }
+
+      // 6. Verify: If end_turn, run verification
+      if (currentStopReason === 'end_turn') {
+        agent.transition('task_done');
+
+        const verifResult = await reliability.verification.execute({ agent, tools });
+
+        if (verifResult.passed) {
+          agent.transition('verified');
+        } else {
+          agent.addMessage('user',
+            `Verification failed:\n${verifResult.summary}\nPlease fix the issues and try again.`
+          );
+          agent.transition('running');
+        }
+      }
+
+      // Yield final turn_complete to consumer
+      for (const pe of tcProcessed) {
+        yield pe;
+      }
+
+      context.cumulative.turnCount++;
+
+    } catch (error: any) {
+      // Error handling with circuit breaker
+      if (error instanceof ModelError) {
+        reliability.exceptionHandler.recordFailure('model');
+      }
+
+      yield {
+        type: 'error',
+        error,
+        recoverable: !(error instanceof ModelError),
+      };
+
+      const action = await reliability.exceptionHandler.handle(error);
+      if (action.strategy.type === 'abort') {
+        agent.transition('error');
+        yield { type: 'status', status: 'failed', message: error.message };
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * [Backward Compatible] Legacy wrapper — consumes the generator and discards events.
+ * Preserves the existing API for callers that don't need streaming.
  */
 export async function runAgentLoop(
   agent: DefaultAgentInstance,
@@ -28,147 +248,13 @@ export async function runAgentLoop(
   sandbox: PermissionSandbox,
   reliability: ReliabilityLayer,
 ): Promise<void> {
+  const pipeline = new MiddlewarePipeline()
+    .use(new TokenCounterMiddleware())
+    .use(new ContentAccumulatorMiddleware());
 
-  // We loop until the agent enters a terminal state (completed, failed, killed)
-  while (!isTerminal(agent.status) && agent.status === 'running') {
-    
-    // 0. Persistence: Save atomic checkpoint at the start of each turn [C3, C4]
-    await reliability.checkpoint.save(agent as any, (reliability.memory as any).l2);
-
-    // 1. Sense: Collect current context (messages + dynamic memory [I1])
-    const memoryContext = reliability.memory.getContext();
-    const contextMessages = agent.messages;
-
-    try {
-      // 2. Think: Call the model with [C5] Retry Strategy
-      const retryGenerator = withRetry(
-        () => model.chat({
-          model: agent.definition.model,
-          systemPrompt: `${agent.definition.systemPrompt}\n\n${memoryContext}`,
-          messages: contextMessages,
-          tools: tools.listAll(),
-        }),
-        { maxAttempts: 3, backoffMs: 1000, backoffMultiplier: 2 }
-      );
-
-      // Consume generator (Phase 1 simplicity: take final result, log intermediaries via events)
-      let response;
-      for await (const status of retryGenerator) {
-        // Status updates are handled by events inside withRetry or here
-        console.log(`[AgentLoop] Model retry attempt ${status.attempt}/${status.maxAttempts}...`);
-      }
-      // The final call to next() returns the result
-      // Actually withRetry implementation returns the value on completion
-      // But AsyncGenerator needs careful handling. 
-      // Re-implementing simplified loop consumption:
-      const generator = withRetry(
-        () => model.chat({
-          model: agent.definition.model,
-          systemPrompt: `${agent.definition.systemPrompt}\n\n${memoryContext}`,
-          messages: contextMessages,
-          tools: tools.listAll(),
-        }),
-        { maxAttempts: 3, backoffMs: 1000, backoffMultiplier: 2 }
-      );
-
-      let next = await generator.next();
-      while (!next.done) {
-        next = await generator.next();
-      }
-      response = next.value;
-
-      // Reset circuit breaker on success [C6]
-      reliability.exceptionHandler.recordSuccess('model');
-
-      // Append assistant's response to the agent's memory
-      agent.addMessage('assistant', response.content);
-
-      // 3. Act: Process model output and handle tool calls
-      const toolResultsContent: MessageContent[] = [];
-
-      for (const block of response.content) {
-        if (block.type === 'tool_use') {
-          // Record tool call for memory flush triggers [C1]
-          reliability.memory.recordToolCall();
-
-          const tool = tools.findTool(block.name);
-          if (!tool) {
-            toolResultsContent.push({ type: 'tool_result', tool_use_id: block.id, content: `Unknown tool: ${block.name}`, is_error: true });
-            continue;
-          }
-
-          try {
-            const result = await executeWithPermissionCheck(tool, block.input, sandbox, agent.context);
-            toolResultsContent.push({ type: 'tool_result', tool_use_id: block.id, content: result.output as any ?? 'Success' });
-          } catch (e: any) {
-            toolResultsContent.push({ type: 'tool_result', tool_use_id: block.id, content: `Error executing tool: ${e.message}`, is_error: true });
-          }
-        }
-      }
-
-      if (toolResultsContent.length > 0) {
-        agent.addMessage('user', toolResultsContent);
-      }
-
-      // 4. Check termination & [I4] Run Verification Pipeline
-      if (response.stopReason === 'end_turn') {
-        agent.transition('task_done'); 
-        
-        // --- [R5] Verification Phase ---
-        const verifResult = await reliability.verification.execute({ agent, tools });
-        
-        if (verifResult.passed) {
-          agent.transition('verified');
-        } else {
-          // [I4] Blocking failed — re-inject remediation and return to thinking
-          agent.addMessage('user', `Verification failed:\n${verifResult.summary}\nPlease fix the issues and try again.`);
-          agent.transition('running'); // Transition back to allow fixing
-        }
-      }
-      
-    } catch (error: any) {
-      // Record failure for circuit breaker [C6]
-      if (error instanceof ModelError) {
-        reliability.exceptionHandler.recordFailure('model');
-      }
-
-      const action = await reliability.exceptionHandler.handle(error);
-      if (action.strategy.type === 'abort') {
-        agent.transition('error');
-        break;
-      }
-      // For other strategies (fallback, human), implementation continues...
-    }
-  }
-}
-
-/**
- * Executes a tool while enforcing the permission sandbox and validation.
- */
-async function executeWithPermissionCheck<I, O>(
-  tool: ToolDefinition<I, O>,
-  input: I,
-  sandbox: PermissionSandbox,
-  context: any,
-) {
-  // Step 1: Tool's internal validation (if available) [R3]
-  if (tool.validateInput) {
-    const valid = await tool.validateInput(input, context);
-    if (!valid.result) {
-      throw new ToolValidationError(tool.name, valid.errors as any);
-    }
-  }
-
-  // Step 2: Tool's own permission checks
-  const permCheck = await tool.checkPermissions(input, context);
-  if (permCheck.behavior === 'deny') {
-    throw new PermissionDeniedError(tool.name, 'unknown' as any, sandbox as any);
-  }
-
-  // Step 4: Execute tool
-  try {
-    return await tool.call(input, context);
-  } catch (err: any) {
-    throw new ToolExecutionError(tool.name, err.message, err);
+  for await (const _event of agentLoop({
+    agent, model, tools, sandbox, pipeline, reliability,
+  })) {
+    // Events discarded — legacy callers don't consume them
   }
 }

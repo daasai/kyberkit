@@ -34,7 +34,7 @@ bun install
 ```text
 my-first-agent/
 ├── kyberkit.config.yaml       # 核心配置文件 (权限、模型、工具)
-├── AGENTS.md               # Agent 行为指南 (Prompt 仓库)
+├── KK.md                   # Agent 行为指南 (Prompt 仓库)
 ├── src/
 │   └── agent.ts            # Agent 启动入口
 ├── skills/                 # L2 Skill 定义目录

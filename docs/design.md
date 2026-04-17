@@ -1,16 +1,18 @@
-# KyberKit：下一代通用 AI Agent 控制论底座 (Harness Framework)
+# KyberKit：面向知识工作者的 AI Agent Harness 框架
 
-**版本**: 1.2 (工程规范)
-**日期**: 2026-04-01
-**运行时**: Node.js / Bun (与 Claude Code 技术栈对齐)
-**目标用户**: 面向知识工作者的垂直 Agent 底座
+**版本**: 1.0 (工程规范)
+**日期**: 2026-04-15
+**运行时**: Bun (TypeScript)
+**目标用户**: 知识工作者 — 在使用中持续构建专属 AI Agent
+**UI**: Terminal TUI (Ink)
+**参考基线**: Claude Code (DeepCC 14 章逆向工程) + Hermes Agent
 
 ---
 
 ## 目录
 
 1. [设计哲学与核心原则](#1-设计哲学与核心原则)
-2. [目标用户与产品定位](#2-目标用户与产品定位)
+2. [目标用户与产品定位 (v2.0 更新)](#2-目标用户与产品定位)
 3. [总体架构分层](#3-总体架构分层)
 4. [Phase 0 — 微内核 (Kernel)](#4-phase-0--微内核-kernel)
 5. [Phase 1 — 可靠性层 (Reliability)](#5-phase-1--可靠性层-reliability)
@@ -21,8 +23,9 @@
 10. [安全威胁模型](#10-安全威胁模型)
 11. [并发与资源管理模型](#11-并发与资源管理模型)
 12. [部署模型](#12-部署模型)
-13. [分阶段交付路线图](#13-分阶段交付路线图)
-14. [附录：关键 SPI 定义](#14-附录关键-spi-定义)
+13. [分阶段交付路线图 (v2.0 更新)](#13-分阶段交付路线图)
+14. [v2.0 新增架构模块](#14-v20-新增架构模块)
+15. [附录：关键 SPI 定义](#15-附录关键-spi-定义)
 
 ---
 
@@ -58,9 +61,22 @@ KyberKit 定位为"AI Agent 的操作系统"。它不提供智能（那是模型
 
 ### 2.1 核心定位
 
-KyberKit 是面向**知识工作者**的 Agent 助手底座。它作为一系列垂直专用 Agent 的运行时基础设施，与垂直 Agent 一起帮助用户完成事务性工作。
+KyberKit 是面向**知识工作者**的 AI Agent Harness 框架。它作为一系列垂直专用 Agent 的运行时脚手架，帮助用户在使用中持续构建自己的 Skills、Tools、Memories、Commands、Prompts、Contexts 等，形成自己的专属 AI Agent。
 
-### 2.2 目标垂直场景
+**核心价值**: 用户资产积累与个性化演进 (User grows Agent through KK)。
+
+### 2.2 用户资产模型 (v2.0 新增)
+
+| 资产类型 | 定义 | 积累方式 | 存储位置 |
+|----------|------|----------|----------|
+| **Skills** | 领域工作流封装 (Markdown) | 用户编写 / Agent 建议 | `.kyberkit/skills/` |
+| **Tools** | 原子能力 (MCP/Shell/函数) | 开发者集成 / MCP 发现 | MCP Server / 代码 |
+| **Memories** | 领域知识与偏好 | **Agent 全自动提取** / 用户手动 | `.kyberkit/memories/` |
+| **Commands** | 快捷交互指令 (/) | 用户定义 / 内置 | `.kyberkit/commands/` |
+| **Prompts** | 行为规范与角色定义 | 用户编写 | `KK.md` |
+| **Contexts** | 动态环境信息源 | 自动感知 / 声明注册 | 运行时 |
+
+### 2.3 目标垂直场景
 
 | 垂直场景 | Agent 类型 | 典型任务 |
 |----------|-----------|---------|
@@ -69,11 +85,12 @@ KyberKit 是面向**知识工作者**的 Agent 助手底座。它作为一系列
 | 知识管理 | Knowledge Agent | 文档整理、知识图谱构建、信息检索 |
 | 内容创作 | Content Agent | 文案生成、编辑润色、多格式输出 |
 
-### 2.3 设计约束
+### 2.4 设计约束
 
-- **不兼容第三方 Framework**: KyberKit 不提供 LangChain 等第三方 Framework 的适配层。垂直 Agent 直接基于 KyberKit SDK 开发
-- **运行时环境**: Node.js / Bun，与 Claude Code 技术栈完全对齐
-- **开源策略**: 暂不确定，不影响当前架构设计
+- **终端 TUI 交互**: 使用 Ink (React for Terminal) 作为主要 UI 框架
+- **仅 Anthropic 模型**: Day 1 仅支持 Claude 系列，后续可扩展
+- **运行时环境**: Bun (TypeScript)
+- **不兼容第三方 Framework**: 垂直 Agent 直接基于 KyberKit SDK 开发
 
 ---
 
@@ -457,7 +474,7 @@ kyberkit init [project-name]
 ```
 my-agent/
 ├── kyberkit.config.yaml       # Harness 配置 (工具层级、权限、预算)
-├── AGENTS.md               # Agent 行为规范 (Single Source of Truth)
+├── KK.md                   # Agent 行为规范 (Single Source of Truth)
 ├── src/
 │   ├── agent.ts            # Agent 入口
 │   ├── tools/              # L1 自定义 MCP/函数式工具
@@ -753,7 +770,7 @@ interface Trajectory {
 ```typescript
 /** 上下文源注册（声明式） [D] */
 interface ContextRegistry {
-  /** 注册静态上下文源 (如 AGENTS.md, project docs) */
+  /** 注册静态上下文源 (如 KK.md, project docs) */
   registerStatic(source: StaticContextSource): void;
   /** 注册动态上下文源 (如 CI/CD 状态、监控数据) */
   registerDynamic(source: DynamicContextSource): void;
@@ -969,7 +986,7 @@ interface ResourceBudget {
 
 - **Context SDK**: 让开发者声明静态上下文（项目文档）、连接动态上下文源（CI/CD 状态、监控系统）
 - **`kyberkit init` 自动生成**: 初始化时扫描项目结构并生成 `project_context.md`，作为 Agent 的入职手册
-- **唯一真实来源约定**: `AGENTS.md` 作为 Agent 行为规范的权威文档
+- **唯一真实来源约定**: `KK.md` 作为 Agent 行为规范的权威文档
 
 ### 9.2 架构约束 (Architectural Constraints)
 

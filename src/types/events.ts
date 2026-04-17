@@ -1,5 +1,6 @@
 import { AgentStatus, AgentDefinition } from './agent.js';
 import { PermissionTag } from './permission.js';
+import { StopReason } from './model.js';
 
 export type KyberEvents = {
   // Agent lifecycle events
@@ -59,4 +60,15 @@ export type KyberEvents = {
   'exception.circuit_breaker_open': { category: string };
   // [I5] Background query dropped event
   'exception.background_dropped': { error: Error; category: string };
+
+  // --- Sprint 1: Streaming Events ---
+
+  // Stream lifecycle
+  'stream.started': { agentId: string; turnNumber: number };
+  'stream.completed': { agentId: string; turnNumber: number; stopReason: StopReason };
+  'stream.error': { agentId: string; turnNumber: number; error: Error };
+
+  // Middleware
+  'middleware.registered': { name: string };
+  'middleware.error': { name: string; error: Error };
 }

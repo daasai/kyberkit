@@ -1,0 +1,21 @@
+{
+  "entries": [
+    {
+      "id": "bd43a2e2-abde-4f0c-85cc-901f344116ad",
+      "category": "user",
+      "content": "User is Bob.",
+      "timestamp": 1776411708135
+    },
+    {
+      "id": "3e462dea-80e0-453c-b661-07f839f7a2ed",
+      "category": "project",
+      "content": "Project Alpha.",
+      "timestamp": 1776411708136
+    }
+  ],
+  "metadata": {
+    "tokenCount": 7,
+    "toolCallCount": 0
+  },
+  "timestamp": 1776411708287
+}

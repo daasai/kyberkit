@@ -218,7 +218,7 @@ packages/kyberkit/
 │       ├── templates/                    #   脚手架模板文件
 │       │   ├── kyberkit.config.yaml.tmpl
 │       │   ├── agent.ts.tmpl
-│       │   ├── AGENTS.md.tmpl
+│       │   ├── KK.md.tmpl
 │       │   └── skill-example.md.tmpl
 │       └── init.test.ts
 │
@@ -976,7 +976,7 @@ export const KyberConfigSchema = z.object({
   agent: z.object({
     name: z.string().default('default'),
     systemPrompt: z.string().optional(),
-    systemPromptFile: z.string().optional(), // 指向 AGENTS.md
+    systemPromptFile: z.string().optional(), // 指向 KK.md
   }).default({}),
 });
 
@@ -1089,7 +1089,7 @@ export async function initProject(projectName: string): Promise<void> {
 
   // 写入模板文件
   await writeFile(join(root, 'kyberkit.config.yaml'), CONFIG_TEMPLATE);
-  await writeFile(join(root, 'AGENTS.md'), AGENTS_MD_TEMPLATE);
+  await writeFile(join(root, 'KK.md'), KK_MD_TEMPLATE);
   await writeFile(join(root, 'src', 'agent.ts'), AGENT_TS_TEMPLATE);
   await writeFile(join(root, 'skills', 'example', 'SKILL.md'), SKILL_EXAMPLE_TEMPLATE);
   await writeFile(join(root, 'package.json'), PACKAGE_JSON_TEMPLATE(projectName));
