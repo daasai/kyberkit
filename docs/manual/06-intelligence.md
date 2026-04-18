@@ -30,6 +30,17 @@ KyberKit 内部集成了基于 **Kahn 算法** 的执行引擎。
 
 当窗口即将溢出时，KK 会基于优先级自动剔除 P2 和 P1 的内容，确保 **P0 (关键指令)** 永远不会被截断，从而避免模型产生由于上下文残缺导致的幻觉。
 
+### 自动压缩 (Context Compression)
+
+即便有优先级调度，超长对话仍会逼近模型的硬上下文上限。为此 KyberKit 内置了 **CompactionGuard**：每轮主 LLM 调用之前都会评估当前 `agent.messages` 的 Token 估算值，一旦跨过硬阈值（默认 `85% × contextWindow`），自动把最早的一段对话压缩为摘要，并在消息序列前插入一条摘要消息，最近若干轮（默认 3 轮）原样保留。
+
+压缩策略分两档：
+
+- **零成本降级**：若 Session Memory 已积累到可用的 Markdown 笔记（第 4.1.2 节），直接把笔记作为摘要，**不发起任何 LLM 调用**。
+- **LLM 摘要**：否则用一个轻量压缩模型（默认 Haiku，通过 `KYBER_COMPACT_MODEL` 覆盖）生成 5–15 行的要点型摘要；该模型失败时自动回落到主模型，保证压缩永不阻塞对话。
+
+压缩严格按 **API Round** 切分（`assistant(tool_use) ↔ user(tool_result)` 为原子对），绝不会拆散一次工具调用。压缩结果通过 `context.compacted` 事件对外广播，您也可以在 REPL 里显式输入 `/compact` 立即触发一次并查看 Token 收益。
+
 ## 6.4 任务规划器 (Planner) 的角色
 
 在 Phase 3 中，Planner 的职责是：

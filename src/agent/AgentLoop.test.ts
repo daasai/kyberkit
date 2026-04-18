@@ -100,13 +100,11 @@ describe('AgentLoop (M6.3)', () => {
           stopReason: 'end_turn',
           usage: { inputTokens: 0, outputTokens: 0 }
         } as ChatResponse)),
-        chatStream: mock(function* () {
-          return streamFromEvents([
-            { type: 'text_delta', text: 'Task completed' },
-            { type: 'message_stop', stopReason: 'end_turn' },
-            { type: 'usage', usage: { inputTokens: 10, outputTokens: 20 } },
-          ]);
-        }) as any,
+        chatStream: mock(() => streamFromEvents([
+          { type: 'text_delta', text: 'Task completed' },
+          { type: 'message_stop', stopReason: 'end_turn' },
+          { type: 'usage', usage: { inputTokens: 10, outputTokens: 20 } },
+        ])) as any,
       };
 
       // Override chatStream to return our async iterable
@@ -347,7 +345,7 @@ describe('AgentLoop (M6.3)', () => {
       expect(agent.status).toBe('completed');
     });
 
-    it('should intercept slash commands without completing the agent lifecycle', async () => {
+    it('should not intercept slash commands at loop layer', async () => {
       agent.addMessage('user', '/help');
 
       const mockModel: ModelProvider = {
@@ -356,7 +354,11 @@ describe('AgentLoop (M6.3)', () => {
         capabilities: () => ({} as any),
         countTokens: async () => 0,
         chat: async () => ({} as any),
-        chatStream: mock(() => streamFromEvents([])) as any,
+        chatStream: mock(() => streamFromEvents([
+          { type: 'text_delta', text: 'Model handled /help text as plain input' },
+          { type: 'message_stop', stopReason: 'end_turn' },
+          { type: 'usage', usage: { inputTokens: 5, outputTokens: 3 } },
+        ])) as any,
       };
 
       const registry = new CommandRegistry();
@@ -381,62 +383,8 @@ describe('AgentLoop (M6.3)', () => {
         events.push(event);
       }
 
-      expect(mockModel.chatStream).not.toHaveBeenCalled();
-      expect(agent.status).toBe('running');
-      expect(events.some(e => e.type === 'turn_complete')).toBe(true);
-      expect(agent.messages[agent.messages.length - 1]).toEqual({
-        role: 'assistant',
-        content: [{ type: 'text', text: '# Available Commands\n\n- **/help**: Show all available commands' }]
-      });
-    });
-
-    it('should continue handling a normal turn after a slash command turn', async () => {
-      const registry = new CommandRegistry();
-      registry.register(new HelpCommand(() => registry.list()));
-
-      const mockModel: ModelProvider = {
-        name: 'mock',
-        supportedModels: [],
-        capabilities: () => ({} as any),
-        countTokens: async () => 0,
-        chat: async () => ({} as any),
-        chatStream: mock(() => streamFromEvents([
-          { type: 'text_delta', text: 'Normal reply' },
-          { type: 'message_stop', stopReason: 'end_turn' },
-          { type: 'usage', usage: { inputTokens: 5, outputTokens: 3 } },
-        ])) as any,
-      };
-
-      const pipeline = new MiddlewarePipeline()
-        .use(new TokenCounterMiddleware())
-        .use(new ContentAccumulatorMiddleware());
-
-      const deps: AgentLoopDeps = {
-        agent,
-        model: mockModel,
-        tools: mockFacade,
-        sandbox,
-        pipeline,
-        reliability,
-        commandRegistry: registry,
-      };
-
-      agent.addMessage('user', '/help');
-      for await (const _event of agentLoop(deps)) {
-        // first command-only turn
-      }
-
-      expect(agent.status).toBe('running');
-      expect(mockModel.chatStream).not.toHaveBeenCalled();
-
-      agent.addMessage('user', 'hello');
-      const secondTurnEvents: AgentEvent[] = [];
-      for await (const event of agentLoop(deps)) {
-        secondTurnEvents.push(event);
-      }
-
       expect(mockModel.chatStream).toHaveBeenCalledTimes(1);
-      expect(secondTurnEvents.some(e => e.type === 'turn_complete')).toBe(true);
+      expect(events.some(e => e.type === 'turn_complete')).toBe(true);
       expect(agent.status).toBe('completed');
     });
   });

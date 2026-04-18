@@ -26,7 +26,7 @@ async function createReliability(agentId: string, rootDir: string): Promise<Reli
   const bus = new TypedEventBus<KyberEvents>();
   const memory = new MemoryStore({
     sessionFile: join(rootDir, 'memory', `${agentId}.session.json`),
-    dbFile: join(rootDir, 'memory', `${agentId}.sqlite`),
+    memoriesDir: join(rootDir, 'memory', 'memories'),
     flushTrigger: { tokenThreshold: 1000, toolCallThreshold: 10, debounceMs: 50 },
     eventBus: bus,
   });

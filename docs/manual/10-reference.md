@@ -63,6 +63,33 @@ kyberkit run
 kyberkit doctor
 ```
 
+## 10.5 交互式斜杠命令 (REPL)
+
+在 TUI / REPL 中可直接键入以下命令。命令会被 Session 层拦截，**不会**进入模型对话上下文，因此 LLM 不会看到它们。
+
+| 命令 | 说明 |
+|------|------|
+| `/help` | 列出当前可用的全部命令及简要说明。 |
+| `/cost` | 打印累计 Input / Output / Cache Token 与估算成本。 |
+| `/compact` | 立即触发一次上下文压缩，输出 `before / after / saved` 的 Token 对比；未达阈值时不动原消息。 |
+| `/memory list` | 列出当前会话可见的所有长期记忆（按三级作用域合并）。 |
+| `/memory add <text>` | 手动追加一条 `user` 类别的记忆，存储为 `.kyberkit/memories/user/<slug>.md`。 |
+| `/memory remove <id-prefix 或 title>` | 按 8 位 ID 前缀或完整标题精确匹配，删除对应 Markdown 文件并刷新索引。 |
+
+## 10.6 环境变量
+
+| 变量 | 作用 | 默认 |
+|------|------|------|
+| `ANTHROPIC_API_KEY` | Anthropic 模型凭据 | — |
+| `KYBER_COMPACT_MODEL` | 指定压缩 / 提取使用的轻量模型（如 `claude-haiku-4-5`） | 未设置时回落主模型 |
+| `KYBER_MEMORY_ENABLED` | 关闭自动记忆提取（`false` 禁用） | `true` |
+| `KYBER_MEMORY_WRITE_SCOPE` | 自动提取的长期记忆写入位置：`user` / `workspace` / `project` | `project` |
+| `KYBER_MEMORY_SESSION_TOKEN_THRESHOLD` | Session 提取的 Token 阈值 | `4000` |
+| `KYBER_MEMORY_SESSION_TOOL_CALL_THRESHOLD` | Session 提取的工具调用阈值 | `8` |
+| `KYBER_MEMORY_SESSION_TURN_THRESHOLD` | Session 提取的轮次阈值 | `5` |
+| `KYBER_MEMORY_LTM_TURN_COOLDOWN` | 长期记忆提取的最小 turn 间隔 | `3` |
+| `KYBER_COMPACTION_HARD_THRESHOLD` / `KYBER_COMPACTION_SOFT_THRESHOLD` / `KYBER_COMPACTION_TARGET_AFTER_COMPACT` / `KYBER_COMPACTION_KEEP_RECENT_ROUNDS` | 自动压缩的 token 阈值、目标体积与保留轮数 | 见 `ConfigLoader` |
+
 ---
 
 ## 结语：迈向真正的智能体世界

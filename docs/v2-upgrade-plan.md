@@ -9,10 +9,10 @@
 ## 总览
 
 ```
-Sprint 1 (流式基础设施)     Step 1-3    ← Agent 可流式运行
-Sprint 2 (用户资产体系)     Step 4-6    ← 用户可积累 Skills/Memories/Prompts
-Sprint 3 (TUI 交互层)      Step 7      ← 终端 REPL 可用
-Sprint 4 (长对话可靠性)     Step 8-10   ← 上下文压缩 + 记忆自动提取
+Sprint 1 (流式基础设施)     Step 1-3    ✅ Agent 可流式运行
+Sprint 2 (用户资产体系)     Step 4-6    ✅ 用户可积累 Skills/Memories/Prompts
+Sprint 3 (TUI 交互层)      Step 7      ✅ 终端 REPL 可用
+Sprint 4 (长对话可靠性)     Step 8-10   ✅ 上下文压缩 + 记忆自动提取 + Markdown LTM
 Sprint 5 (扩展性)          Step 11-13  ← Prompt Cache + Hook + 并行工具
 Sprint 6 (多 Agent)        Step 14-15  ← Coordinator + TUI 增强
 ```
@@ -244,30 +244,44 @@ bin/kyberkit
 
 ---
 
-## Sprint 4: 长对话可靠性 (Step 8-10)
+## Sprint 4: 长对话可靠性 (Step 8-10) ✅ 已完成
 
-### Step 8: 上下文压缩引擎
+> **状态**：Sprint 4 已全部落地并通过测试（226 pass / 4 skip / 0 fail）。
+> **设计规范**：详见 `docs/sprint4-design-spec.zh.md`。
 
-**变更文件**:
-- [NEW] `src/compression/ContextCompressor.ts`
-- [NEW] `src/compression/RoundGrouping.ts` — API Round 配对保护
-- [NEW] `src/compression/LLMSummaryCompactor.ts` — Haiku 压缩
-- [NEW] `src/agent/middleware/CompactionGuardMiddleware.ts`
-
-### Step 9: Session Memory 引擎
+### Step 8: 上下文压缩引擎 ✅
 
 **变更文件**:
-- [MODIFY] `src/memory/SessionMemory.ts` — 结构化 Markdown 模板
-- [NEW] `src/memory/SessionMemoryExtractor.ts` — Fork LLM 提取
-- [NEW] `src/agent/middleware/MemoryTriggerMiddleware.ts`
-- [NEW] `src/compression/SessionMemoryCompactor.ts` — 零成本压缩降级
+- [NEW] `src/types/compression.ts` — `TokenBudget` / `CompactOptions` / `CompactResult` / `CompactStrategy`
+- [NEW] `src/compression/RoundGrouping.ts` — API Round 配对保护 + `keepIndex` 计算
+- [NEW] `src/compression/ContextCompressor.ts` — 策略编排与 `context.compacted` 事件
+- [NEW] `src/compression/LLMSummaryCompactor.ts` — Haiku 摘要（含 fallback）
+- [NEW] `src/compression/SessionMemoryCompactor.ts` — 零成本降级
+- [NEW] `src/agent/middleware/CompactionGuardMiddleware.ts` — 主循环 `beforeTurn` 钩子
+- [MODIFY] `src/commands/builtin/CompactCommand.ts` — 从占位改为真实触发
+- [MODIFY] `src/agent/AgentLoop.ts` — 新增 `compactionGuard` 依赖与 `beforeTurn` 阶段
 
-### Step 10: Long-term Memory 自动提取
+### Step 9: Session Memory 引擎 ✅
 
 **变更文件**:
-- [NEW] `src/memory/LongTermMemoryExtractor.ts`
-- [MODIFY] `src/memory/LongTermMemory.ts` — Markdown + frontmatter 写入
-- [MODIFY] `src/assets/MemoryDirScanner.ts` — 支持自动写入的记忆文件
+- [MODIFY] `src/memory/SessionMemory.ts` — 新增 `SessionMemoryNotes` 字段、`mergeExtracted` / `getExtractedMarkdown` / `hasExtractedNotes`；`buildContextTemplate` 优先返回自动提取的 Markdown
+- [NEW] `src/memory/extractors/SessionMemoryExtractor.ts` — 固定 7 段式 Markdown 提取（compactModel + fallback）
+- [NEW] `src/agent/middleware/MemoryTriggerMiddleware.ts` — 按 Token / 工具调用 / 轮次阈值触发后台提取
+- [NEW] `src/util/AsyncMutex.ts` — 20 行自研互斥锁，确保提取串行化
+- [MODIFY] `src/types/events.ts` — 新增 `memory.extracted` / `memory.extraction_skipped` 事件
+
+### Step 10: Long-term Memory 自动提取 + Markdown 迁移 ✅
+
+**变更文件**:
+- [NEW] `src/memory/MarkdownMemoryStore.ts` — 文件系统后端；`<category>/<slug>-<id8>.md` + YAML frontmatter；原子写 / id 去重 / `MEMORY.md` 自动索引 / age+count prune
+- [REWRITE] `src/memory/LongTermMemory.ts` — 移除 `bun:sqlite`，内部委托 `MarkdownMemoryStore`；`save()` 替换为 `writeEntry({title, source, tags})`
+- [NEW] `src/memory/extractors/LongTermMemoryExtractor.ts` — LLM 驱动的长期记忆提取；容错 JSON 解析；`category::title` 精确去重
+- [MODIFY] `src/memory/MemoryStore.ts` — 配置字段 `dbFile` → `memoriesDir`；保留 `learn()` 标记 `@deprecated`
+- [MODIFY] `src/assets/MemoryDirScanner.ts` — 递归扫描一层 `<category>/` 子目录并回填 `metadata.category`
+- [MODIFY] `src/commands/builtin/MemoryCommand.ts` — 新增 `/memory add` / `/memory remove` 子命令
+- [MODIFY] `src/runtime/WorkspaceInstance.ts` — 新增 `attachLongTermMemory(getter)` 供 Runtime 延迟注入
+- [MODIFY] `src/runtime/KyberRuntime.ts` — 构造 `LongTermMemoryExtractor` 并通过 `MemoryTriggerMiddleware` 接入
+- [MODIFY] `src/types/config.ts` + `src/config/ConfigLoader.ts` — 新增 `compaction` / `memory` 配置节与对应 `KYBER_COMPACTION_*` / `KYBER_MEMORY_*` 环境变量
 
 ---
 

@@ -25,6 +25,11 @@ import { mkdir } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { AgentSession, buildReliability } from './AgentSession.js';
 import type { CreateSessionOptions } from './AgentSession.js';
+import { ContextCompressor } from '../compression/ContextCompressor.js';
+import { CompactionGuardMiddleware } from '../agent/middleware/CompactionGuardMiddleware.js';
+import { MemoryTriggerMiddleware } from '../agent/middleware/MemoryTriggerMiddleware.js';
+import { SessionMemoryExtractor } from '../memory/extractors/SessionMemoryExtractor.js';
+import { LongTermMemoryExtractor } from '../memory/extractors/LongTermMemoryExtractor.js';
 
 export class KyberRuntime {
   private bus!: TypedEventBus<KyberEvents>;
@@ -218,6 +223,10 @@ export class KyberRuntime {
     }
 
     const pipeline = opts.middleware ?? this.createMiddlewarePipeline();
+    this.getActiveWorkspace().attachLongTermMemory(() => {
+      const mem = reliability.memory as any;
+      return typeof mem?.getLongTermMemory === 'function' ? mem.getLongTermMemory() : undefined;
+    });
     const deps = this.createAgentLoopDeps(agent, reliability, pipeline);
 
     return new AgentSession(sessionId, agent, deps, reliability, cleanup);
@@ -232,17 +241,82 @@ export class KyberRuntime {
     pipeline?: MiddlewarePipeline,
   ): AgentLoopDeps {
     const workspace = this.getActiveWorkspace();
-    
+    const hasSessionMemory =
+      reliability.memory && typeof (reliability.memory as any).getSessionMemory === 'function';
+    const sessionMemoryInstance = hasSessionMemory
+      ? (reliability.memory as any).getSessionMemory()
+      : null;
+
+    const compactionGuard = sessionMemoryInstance
+      ? new CompactionGuardMiddleware(
+          new ContextCompressor({
+            model: this.model,
+            sessionMemory: sessionMemoryInstance,
+            eventBus: this.bus,
+            mainModelName: this.config.model.name,
+            compactModelName: this.config.model.compactModel,
+          }),
+          {
+            contextWindow: this.config.compaction.contextWindow,
+            hardThreshold: this.config.compaction.hardThreshold,
+            softThreshold: this.config.compaction.softThreshold,
+            targetAfterCompact: this.config.compaction.targetAfterCompact,
+          },
+          {
+            preferSessionMemory: this.config.compaction.preferSessionMemory,
+            keepRecentRounds: this.config.compaction.keepRecentRounds,
+            compactModel: this.config.model.compactModel,
+          },
+        )
+      : undefined;
+
+    const resolvedPipeline = pipeline ?? this.createMiddlewarePipeline();
+    if (sessionMemoryInstance) {
+      const longTerm =
+        typeof (reliability.memory as any).getLongTermMemory === 'function'
+          ? (reliability.memory as any).getLongTermMemory()
+          : undefined;
+      const ltmExtractor = longTerm
+        ? new LongTermMemoryExtractor({
+            model: this.model,
+            compactModel: this.config.model.compactModel,
+            fallbackModel: this.config.model.name,
+            longTerm,
+            store: longTerm.getStore(),
+          })
+        : undefined;
+
+      const memoryTrigger = new MemoryTriggerMiddleware({
+        sessionExtractor: new SessionMemoryExtractor({
+          model: this.model,
+          compactModel: this.config.model.compactModel,
+          fallbackModel: this.config.model.name,
+        }),
+        sessionMemory: sessionMemoryInstance,
+        ltmExtractor,
+        eventBus: this.bus,
+        config: {
+          sessionTokenThreshold: this.config.memory.sessionTokenThreshold,
+          sessionToolCallThreshold: this.config.memory.sessionToolCallThreshold,
+          sessionTurnThreshold: this.config.memory.sessionTurnThreshold,
+          ltmTurnCooldown: this.config.memory.ltmTurnCooldown,
+          enabled: this.config.memory.enabled,
+        },
+      });
+      resolvedPipeline.use(memoryTrigger);
+    }
+
     return {
       agent,
       model: this.model,
       tools: this.tools,
       sandbox: this.sandbox,
-      pipeline: pipeline ?? this.createMiddlewarePipeline(),
+      pipeline: resolvedPipeline,
       reliability,
       promptAssembler: workspace.promptAssembler,
       commandRegistry: workspace.commandRegistry,
       workspace: workspace,
+      compactionGuard,
     };
 
   }

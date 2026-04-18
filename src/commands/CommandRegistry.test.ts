@@ -52,7 +52,7 @@ describe('Command System', () => {
     // Test /compact
     const compactRes = await registry.execute('/compact', context);
     expect(compactRes.success).toBe(true);
-    expect(compactRes.output).toContain('Sprint 4');
+    expect(compactRes.output).toContain('Compaction is enabled');
   });
 
   it('should handle unknown commands', async () => {

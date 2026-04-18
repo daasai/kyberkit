@@ -1,119 +1,104 @@
-import { Database } from 'bun:sqlite';
-import { dirname } from 'path';
-import { mkdirSync } from 'fs';
-import { MemoryEntry, MemoryCategory } from '../types/memory.js';
-import { TypedEventBus } from '../events/EventBus.js';
-import { KyberEvents } from '../types/events.js';
+import { MarkdownMemoryStore, type MarkdownMemoryFile } from './MarkdownMemoryStore.js';
+import type { MemoryEntry, MemoryCategory } from '../types/memory.js';
+import type { TypedEventBus } from '../events/EventBus.js';
+import type { KyberEvents } from '../types/events.js';
 
 /**
- * [R1.4] LongTermMemory (L3) - Persistent SQLite-based cross-session store.
- * [CC-Aligned]: Stores structured knowledge with category indexing.
- * Uses bun:sqlite for native compatibility.
+ * Sprint 4 §5.4 — LongTermMemory (L3).
+ *
+ * Previously backed by `bun:sqlite` (Sprint 1). Now delegates to
+ * `MarkdownMemoryStore` so each entry is a human-readable `.md` file under
+ * `.kyberkit/memories/<category>/<slug>.md`. The manual `save()` entry
+ * point is intentionally removed (D4 — extract-only write path).
  */
 export class LongTermMemory {
-  private readonly db: Database;
+  private readonly store: MarkdownMemoryStore;
 
   constructor(
-    dbPath: string,
-    private readonly eventBus: TypedEventBus<KyberEvents>
+    private readonly rootDir: string,
+    eventBus: TypedEventBus<KyberEvents>,
   ) {
-    // Ensure directory exists
-    mkdirSync(dirname(dbPath), { recursive: true });
-    this.db = new Database(dbPath);
-    this.init();
+    this.store = new MarkdownMemoryStore(rootDir, eventBus);
   }
 
-  private init(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        category TEXT NOT NULL,
-        content TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        metadata TEXT,
-        score REAL DEFAULT 1.0
-      );
-      CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
-      CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp);
-    `);
+  /** Filesystem root for this long-term memory (for callers / tests). */
+  getRootDir(): string {
+    return this.rootDir;
   }
 
-  /** Persist a memory entry into L3. */
-  save(entry: MemoryEntry): void {
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO memories (id, category, content, timestamp, metadata, score)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
-      entry.id,
-      entry.category,
-      entry.content,
-      entry.timestamp,
-      entry.metadata ? JSON.stringify(entry.metadata) : null,
-      entry.score ?? 1.0
-    );
-
-    this.eventBus.emit('memory.written', { tierId: 'L3', entryId: entry.id });
+  /** Low-level accessor used by `LongTermMemoryExtractor` / `/memory` commands. */
+  getStore(): MarkdownMemoryStore {
+    return this.store;
   }
 
-  /** Retrieve entries by category. */
-  findByCategory(category: MemoryCategory, limit: number = 20): MemoryEntry[] {
-    const stmt = this.db.prepare(`
-      SELECT * FROM memories WHERE category = ? ORDER BY timestamp DESC LIMIT ?
-    `);
-    
-    return (stmt.all(category, limit) as any[]).map(row => this.rowToEntry(row));
-  }
-
-  /** Search content (simple LIKE search for now, could be FTS5). */
-  search(query: string, limit: number = 10): MemoryEntry[] {
-    const stmt = this.db.prepare(`
-      SELECT * FROM memories WHERE content LIKE ? ORDER BY score DESC, timestamp DESC LIMIT ?
-    `);
-
-    return (stmt.all(`%${query}%`, limit) as any[]).map(row => this.rowToEntry(row));
-  }
-
-  /** 
-   * [R1.4] Eviction policy.
-   * Prunes entries by age (TTL) or count (LRU).
+  /**
+   * Persist a memory entry. Used by the extractor and by the `/memory add`
+   * slash command. Manual write during natural-language turns is discouraged.
    */
-  prune(maxAgeMs: number, maxEntries: number): void {
-    const now = Date.now();
-    
-    // Time-based eviction
-    const ageResult = this.db.prepare('DELETE FROM memories WHERE timestamp < ?').run(now - maxAgeMs);
-    
-    // Count-based eviction
-    const countResult = this.db.prepare(`
-      DELETE FROM memories WHERE id IN (
-        SELECT id FROM memories ORDER BY timestamp DESC OFFSET ?
-      )
-    `).run(maxEntries);
-
-    const totalEvicted = (ageResult as any).changes + (countResult as any).changes;
-    if (totalEvicted > 0) {
-      this.eventBus.emit('memory.evicted', { 
-        tierId: 'L3', 
-        count: totalEvicted, 
-        policy: 'composite_ttl_lru' 
-      });
-    }
+  async writeEntry(
+    entry: MemoryEntry & { title: string; source: 'auto' | 'manual'; tags?: string[] },
+  ): Promise<void> {
+    const ts = new Date(entry.timestamp).toISOString();
+    await this.store.write({
+      id: entry.id,
+      category: entry.category,
+      title: entry.title,
+      tags: entry.tags,
+      createdAt: ts,
+      updatedAt: ts,
+      source: entry.source,
+      score: entry.score,
+      body: entry.content,
+    });
   }
 
-  private rowToEntry(row: any): MemoryEntry {
-    return {
-      id: row.id,
-      category: row.category as MemoryCategory,
-      content: row.content,
-      timestamp: row.timestamp,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-      score: row.score,
-    };
+  async findByCategory(category: MemoryCategory, limit = 20): Promise<MemoryEntry[]> {
+    const files = await this.store.findByCategory(category, limit);
+    return files.map(toEntry);
   }
 
+  async search(query: string, limit = 10): Promise<MemoryEntry[]> {
+    const files = await this.store.search(query, limit);
+    return files.map(toEntry);
+  }
+
+  async list(): Promise<MemoryEntry[]> {
+    const files = await this.store.list();
+    return files.map(toEntry);
+  }
+
+  async remove(id: string): Promise<boolean> {
+    return this.store.remove(id);
+  }
+
+  /**
+   * Eviction: removes entries older than `maxAgeMs` (by `updatedAt`) and
+   * trims to `maxEntries` most-recent overall.
+   *
+   * Kept async (was sync in Sprint 1) since filesystem access is inherent.
+   */
+  async prune(maxAgeMs: number, maxEntries: number): Promise<void> {
+    await this.store.prune(maxAgeMs, maxEntries);
+  }
+
+  /** No persistent handle to close in Markdown mode. Kept for API parity. */
   close(): void {
-    this.db.close();
+    // no-op
   }
+}
+
+function toEntry(f: MarkdownMemoryFile): MemoryEntry {
+  return {
+    id: f.id,
+    category: f.category,
+    content: f.body,
+    timestamp: Date.parse(f.updatedAt) || 0,
+    metadata: {
+      title: f.title,
+      tags: f.tags,
+      source: f.source,
+      path: f.path,
+    },
+    score: f.score,
+  };
 }

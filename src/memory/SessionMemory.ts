@@ -9,14 +9,31 @@ interface SessionMetadata {
   toolCallCount: number;
 }
 
+export interface SessionMemoryNotes {
+  /** Structured Markdown produced by SessionMemoryExtractor. */
+  markdown: string;
+  /** Number of messages the extractor saw when producing this note. */
+  basedOnMessages: number;
+  /** Token estimate of `markdown`. */
+  tokenCount: number;
+  /** Wall-clock timestamp of last update. */
+  updatedAt: number;
+}
+
 /**
  * [R1.3] SessionMemory (L2) - Persistent, mission-critical session store.
  * [C1]: Replaces debounced flush with token/tool-call thresholds.
  * [I1]: Generates structured context using 8 fixed sections.
+ *
+ * Sprint 4: Adds Markdown-based auto-extracted notes (mergeExtracted) that
+ * take priority in buildContextTemplate() when present. Existing push() /
+ * recordToolCall() / heuristic section mapping remain for backward
+ * compatibility with Sprint 1-2 callers and tests.
  */
 export class SessionMemory {
   private entries: MemoryEntry[] = [];
   private metadata: SessionMetadata = { tokenCount: 0, toolCallCount: 0 };
+  private extractedNotes: SessionMemoryNotes | null = null;
   private pendingCount: number = 0;
   private readonly filePath: string;
   private readonly trigger: MemoryFlushTrigger;
@@ -44,6 +61,46 @@ export class SessionMemory {
   recordToolCall(): void {
     this.metadata.toolCallCount++;
     this.evaluateTriggers().catch(console.error);
+  }
+
+  /**
+   * Sprint 4: replace the structured Markdown note with extractor output.
+   *
+   * Unlike push(), this is the main write path for auto-extracted knowledge.
+   * It atomically replaces the current note and schedules persistence.
+   */
+  mergeExtracted(markdown: string, stats: { basedOnMessages: number; tokenCount: number }): void {
+    const normalized = markdown.trim();
+    if (normalized.length === 0) return;
+
+    this.extractedNotes = {
+      markdown: normalized,
+      basedOnMessages: stats.basedOnMessages,
+      tokenCount: stats.tokenCount,
+      updatedAt: Date.now(),
+    };
+    this.isDirty = true;
+    this.flush().catch(console.error);
+  }
+
+  /** Sprint 4: metadata about the latest auto-extracted note, if any. */
+  getNotesMeta(): Pick<SessionMemoryNotes, 'basedOnMessages' | 'tokenCount' | 'updatedAt'> | null {
+    if (!this.extractedNotes) return null;
+    return {
+      basedOnMessages: this.extractedNotes.basedOnMessages,
+      tokenCount: this.extractedNotes.tokenCount,
+      updatedAt: this.extractedNotes.updatedAt,
+    };
+  }
+
+  /** Sprint 4: whether an auto-extracted Markdown note is currently present. */
+  hasExtractedNotes(): boolean {
+    return this.extractedNotes !== null && this.extractedNotes.markdown.length > 0;
+  }
+
+  /** Sprint 4: raw Markdown of the extracted notes (used by SessionMemoryCompactor). */
+  getExtractedMarkdown(): string | null {
+    return this.extractedNotes?.markdown ?? null;
   }
 
   /** [C1] Evaluate if we should persist to disk. */
@@ -80,6 +137,7 @@ export class SessionMemory {
       const data = JSON.stringify({
         entries: this.entries,
         metadata: this.metadata,
+        extractedNotes: this.extractedNotes,
         timestamp: Date.now(),
       }, null, 2);
 
@@ -100,8 +158,15 @@ export class SessionMemory {
   /**
    * [I1] Structured context builder.
    * Compiles memories into 8 deterministic Markdown sections.
+   *
+   * Sprint 4: If an auto-extracted Markdown note is present, return it
+   * verbatim. Otherwise fall back to the Sprint 1 category heuristic.
    */
   buildContextTemplate(): string {
+    if (this.extractedNotes && this.extractedNotes.markdown.length > 0) {
+      return this.extractedNotes.markdown;
+    }
+
     const sections: Record<MemorySection, string[]> = {
       [MemorySection.CURRENT_TASK]: [],
       [MemorySection.USER_PREFERENCES]: [],
@@ -144,6 +209,7 @@ export class SessionMemory {
       const data = JSON.parse(content);
       this.entries = data.entries || [];
       this.metadata = data.metadata || { tokenCount: 0, toolCallCount: 0 };
+      this.extractedNotes = data.extractedNotes ?? null;
       this.isDirty = false;
     } catch (e) {
       // File missing or corrupt — start fresh
@@ -153,6 +219,7 @@ export class SessionMemory {
   clear(): void {
     this.entries = [];
     this.metadata = { tokenCount: 0, toolCallCount: 0 };
+    this.extractedNotes = null;
     this.isDirty = true;
   }
 }

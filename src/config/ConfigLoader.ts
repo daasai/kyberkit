@@ -65,6 +65,30 @@ function buildConfigFromEnv(): Record<string, unknown> {
       apiKey: process.env.ANTHROPIC_API_KEY || process.env.KYBER_API_KEY,
       baseUrl: process.env.KYBER_MODEL_BASE_URL,
       maxTokens: parseNum(process.env.KYBER_MODEL_MAX_TOKENS),
+      compactModel: process.env.KYBER_COMPACT_MODEL,
+    },
+    compaction: {
+      contextWindow: parseNum(process.env.KYBER_COMPACTION_CONTEXT_WINDOW),
+      hardThreshold: parseNum(process.env.KYBER_COMPACTION_HARD_THRESHOLD),
+      softThreshold: parseNum(process.env.KYBER_COMPACTION_SOFT_THRESHOLD),
+      targetAfterCompact: parseNum(process.env.KYBER_COMPACTION_TARGET),
+      keepRecentRounds: parseNum(process.env.KYBER_COMPACTION_KEEP_ROUNDS),
+      preferSessionMemory:
+        process.env.KYBER_COMPACTION_PREFER_SESSION === undefined
+          ? undefined
+          : process.env.KYBER_COMPACTION_PREFER_SESSION === 'true',
+    },
+    memory: {
+      sessionTokenThreshold: parseNum(process.env.KYBER_MEMORY_SESSION_TOKEN_THRESHOLD),
+      sessionToolCallThreshold: parseNum(process.env.KYBER_MEMORY_SESSION_TOOL_CALL_THRESHOLD),
+      sessionTurnThreshold: parseNum(process.env.KYBER_MEMORY_SESSION_TURN_THRESHOLD),
+      ltmTurnCooldown: parseNum(process.env.KYBER_MEMORY_LTM_TURN_COOLDOWN),
+      enabled:
+        process.env.KYBER_MEMORY_ENABLED === undefined
+          ? undefined
+          : process.env.KYBER_MEMORY_ENABLED !== 'false',
+      writeScope: process.env.KYBER_MEMORY_WRITE_SCOPE as
+        | 'user' | 'workspace' | 'project' | undefined,
     },
     permissions: {
       allowed: parseList(process.env.KYBER_PERMS_ALLOWED),

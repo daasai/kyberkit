@@ -3,6 +3,7 @@ import { ModelProvider } from '../types/model.js';
 import { AssetRegistry, DefaultAssetRegistry } from '../assets/AssetRegistry.js';
 import { PromptAssembler } from '../prompt/PromptAssembler.js';
 import { CommandRegistry } from '../commands/CommandRegistry.js';
+import type { LongTermMemory } from '../memory/LongTermMemory.js';
 
 // Providers
 import { IdentityProvider } from '../prompt/providers/IdentityProvider.js';
@@ -28,6 +29,14 @@ export class WorkspaceInstance {
   readonly promptAssembler: PromptAssembler;
   readonly commandRegistry: CommandRegistry;
 
+  /**
+   * Session-scoped supplier for the long-term memory instance. Populated by
+   * `KyberRuntime.createSession` after reliability layer is built so that
+   * `/memory add` and `/memory remove` can write to the same store used by
+   * the extractor.
+   */
+  private longTermSupplier: () => LongTermMemory | undefined = () => undefined;
+
   constructor(
     readonly config: WorkspaceConfig
   ) {
@@ -47,8 +56,21 @@ export class WorkspaceInstance {
     this.commandRegistry = new CommandRegistry()
       .register(new HelpCommand(() => this.commandRegistry.list()))
       .register(new CostCommand())
-      .register(new MemoryCommand(() => this.assets.getMemories()))
+      .register(
+        new MemoryCommand(
+          () => this.assets.getMemories(),
+          () => this.longTermSupplier(),
+        ),
+      )
       .register(new CompactCommand());
+  }
+
+  /**
+   * Install a lazy accessor for the session-scoped long-term memory. Called
+   * from `KyberRuntime.createSession` once reliability is wired.
+   */
+  attachLongTermMemory(getter: () => LongTermMemory | undefined): void {
+    this.longTermSupplier = getter;
   }
 
   /** Bootstrap the workspace by scanning assets. */

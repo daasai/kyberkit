@@ -61,7 +61,7 @@ export interface ReliabilityBuildConfig {
  * - 'real':    persists to `config.rootDir`; caller owns cleanup.
  * - 'inmemory': allocates a unique OS temp dir; cleanup() removes it.
  *
- * Both modes use the same implementations (MemoryStore/SQLite, JsonCheckpointProvider,
+ * Both modes use the same implementations (MemoryStore, JsonCheckpointProvider,
  * ExceptionHandler, VerificationPipeline) — the only difference is where files live.
  */
 export async function buildReliability(
@@ -84,7 +84,7 @@ export async function buildReliability(
 
   const memory = new MemoryStore({
     sessionFile: join(rootDir, `${config.agentId}.session.json`),
-    dbFile: join(rootDir, `${config.agentId}.sqlite`),
+    memoriesDir: join(rootDir, 'memories'),
     flushTrigger: { tokenThreshold: 1000, toolCallThreshold: 10, debounceMs: 100 },
     eventBus: bus,
   });

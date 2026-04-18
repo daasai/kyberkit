@@ -13,7 +13,7 @@
 ## 9.2 垂直工具链与内存配置
 
 - **L1 (MCP)**：`FileSystemServer`。用于实时监控文件变更。
-- **L3 (Memory)**：`LongTermMemory` (SQLite 后端)。存储处理后的知识条目。
+- **L3 (Memory)**：`LongTermMemory`（Markdown 后端，落盘 `.kyberkit/memories/<category>/*.md`）。每条知识一个带 YAML frontmatter 的文件，可被 git 版本化、被用户手工编辑。
 - **L2 (Skill)**：定义 `doc_parse_skill` 和 `fact_check_skill`。
 
 ## 9.3 核心实现逻辑
@@ -22,7 +22,7 @@
 
 在 Knowledge Agent 中，KM 系统会自动对记忆进行分层：
 - **热数据 (Session Memory)**：当前正在讨论的文档上下文。
-- **冷数据 (Long-term Memory)**：存储在 SQLite 中的历史知识。
+- **冷数据 (Long-term Memory)**：存储在 `.kyberkit/memories/` 下的 Markdown 文件中，每条知识独立成文，随项目一起纳入 git。
 - **策略**：当用户提问时，KK 会先搜索 L3，并将最相关的 Top-K 条目“热加载”到 Session Memory。
 
 ### 9.3.2 记忆清理 (Eviction) 与 权重 (Scoring)

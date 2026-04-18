@@ -35,6 +35,8 @@ export interface AgentLoopDeps {
   commandRegistry?: import('../commands/CommandRegistry.js').CommandRegistry;
   // Sprint 2: Workspace context
   workspace?: import('../runtime/WorkspaceInstance.js').WorkspaceInstance;
+  // Sprint 4: Turn-begin context compaction guard
+  compactionGuard?: import('./middleware/CompactionGuardMiddleware.js').CompactionGuardMiddleware;
 }
 
 
@@ -69,6 +71,23 @@ export async function* agentLoop(
     // 1. Checkpoint
     await reliability.checkpoint.save(agent as any, (reliability.memory as any).l2);
 
+    // 1.5 Sprint 4: pre-turn compaction
+    if (deps.compactionGuard) {
+      try {
+        const compaction = await deps.compactionGuard.evaluateAndCompact(agent);
+        if (compaction.replacedMessages && compaction.replacedMessages.length > 0) {
+          (agent as any).messages = compaction.replacedMessages as any;
+          yield {
+            type: 'status',
+            status: 'compacted',
+            message: 'Context compacted before turn.',
+          };
+        }
+      } catch {
+        // Compaction is best-effort; continue without interruption.
+      }
+    }
+
     // 2. Sense: memory context
     const memoryContext = reliability.memory.getContext();
 
@@ -91,34 +110,6 @@ export async function* agentLoop(
       systemPrompt = assembled.text;
     } else {
       systemPrompt = `${agent.definition.systemPrompt ?? ''}\n\n${memoryContext}`;
-    }
-
-    // [New Step] Intercept / commands
-    if (deps.commandRegistry) {
-      const lastMessage = agent.messages[agent.messages.length - 1];
-      if (lastMessage && lastMessage.role === 'user' && typeof lastMessage.content === 'string' && deps.commandRegistry.isCommand(lastMessage.content)) {
-        const cmdResult = await deps.commandRegistry.execute(lastMessage.content, {
-          cumulative: context.cumulative,
-          cwd: process.cwd(),
-          assets: deps.workspace?.assets?.getManifest?.() || undefined,
-        });
-
-
-
-        yield { type: 'text_delta', text: cmdResult.output };
-        
-        if (!cmdResult.continueConversation) {
-          agent.addMessage('assistant', [{ type: 'text', text: cmdResult.output }]);
-          yield { 
-            type: 'turn_complete', 
-            turnNumber: context.turnNumber, 
-            stopReason: 'end_turn', 
-            content: [{ type: 'text', text: cmdResult.output }] 
-          };
-          context.cumulative.turnCount++;
-          break; // End this local command turn without completing the agent lifecycle
-        }
-      }
     }
 
     try {

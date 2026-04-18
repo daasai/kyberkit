@@ -36,6 +36,23 @@ export type KyberEvents = {
   'memory.evicted': { tierId: string; count: number; policy: string };
   // [C1] Session memory flush triggered by token threshold
   'memory.session_flushed': { tokenCount: number; toolCallCount: number };
+  // Sprint 4: Context compression
+  'context.compacted': {
+    strategy: 'session_memory' | 'llm_summary' | 'noop';
+    tokensBefore: number;
+    tokensAfter: number;
+    saved: number;
+  };
+  // Sprint 4: Memory auto-extraction
+  'memory.extracted': {
+    tier: 'session' | 'long_term';
+    entryCount: number;
+    basedOnMessages: number;
+  };
+  'memory.extraction_skipped': {
+    tier: 'session' | 'long_term';
+    reason: string;
+  };
 
   // Checkpoint events
   'checkpoint.saved': { agentId: string; checkpointId: string };
