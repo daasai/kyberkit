@@ -1,0 +1,21 @@
+{
+  "id": "0db33475-959e-4e70-a3e4-9d753e695adc-1776845686872-a843cd60",
+  "agentId": "0db33475-959e-4e70-a3e4-9d753e695adc",
+  "timestamp": 1776845686873,
+  "messages": [
+    {
+      "role": "user",
+      "content": "帮我分析'/Users/shawn/Data/Kyberkit/spaces/default/reports/省心租交易数据分析报告.md',给出贝易转产品的在各城市的渗透趋势"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776845686873
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776845686873
+  },
+  "version": "v1"
+}

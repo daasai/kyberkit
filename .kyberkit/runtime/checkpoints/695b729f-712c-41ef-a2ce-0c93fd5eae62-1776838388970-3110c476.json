@@ -1,0 +1,21 @@
+{
+  "id": "695b729f-712c-41ef-a2ce-0c93fd5eae62-1776838388970-3110c476",
+  "agentId": "695b729f-712c-41ef-a2ce-0c93fd5eae62",
+  "timestamp": 1776838388970,
+  "messages": [
+    {
+      "role": "user",
+      "content": "介绍下自己"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776838388970
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776838388970
+  },
+  "version": "v1"
+}

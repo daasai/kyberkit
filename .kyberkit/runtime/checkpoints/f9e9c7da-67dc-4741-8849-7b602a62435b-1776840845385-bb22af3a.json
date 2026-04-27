@@ -1,0 +1,21 @@
+{
+  "id": "f9e9c7da-67dc-4741-8849-7b602a62435b-1776840845385-bb22af3a",
+  "agentId": "f9e9c7da-67dc-4741-8849-7b602a62435b",
+  "timestamp": 1776840845385,
+  "messages": [
+    {
+      "role": "user",
+      "content": "分析/Users/shawn/Data/Kyberkit/spaces/default/data/省心租交易数据_全国_2\r    02503197319642467751310656.csv ，输出各类支付方式的占比"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776840845385
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776840845385
+  },
+  "version": "v1"
+}

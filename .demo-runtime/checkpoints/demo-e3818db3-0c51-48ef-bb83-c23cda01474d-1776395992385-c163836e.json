@@ -1,0 +1,21 @@
+{
+  "id": "demo-e3818db3-0c51-48ef-bb83-c23cda01474d-1776395992385-c163836e",
+  "agentId": "demo-e3818db3-0c51-48ef-bb83-c23cda01474d",
+  "timestamp": 1776395992385,
+  "messages": [
+    {
+      "role": "user",
+      "content": "/help"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776395992385
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776395992385
+  },
+  "version": "v1"
+}

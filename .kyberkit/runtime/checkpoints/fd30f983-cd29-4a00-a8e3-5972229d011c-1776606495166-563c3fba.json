@@ -1,0 +1,21 @@
+{
+  "id": "fd30f983-cd29-4a00-a8e3-5972229d011c-1776606495166-563c3fba",
+  "agentId": "fd30f983-cd29-4a00-a8e3-5972229d011c",
+  "timestamp": 1776606495166,
+  "messages": [
+    {
+      "role": "user",
+      "content": "你谁呀?"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776606495166
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776606495166
+  },
+  "version": "v1"
+}

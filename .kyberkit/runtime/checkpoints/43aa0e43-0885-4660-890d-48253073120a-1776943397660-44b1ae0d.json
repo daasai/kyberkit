@@ -1,0 +1,21 @@
+{
+  "id": "43aa0e43-0885-4660-890d-48253073120a-1776943397660-44b1ae0d",
+  "agentId": "43aa0e43-0885-4660-890d-48253073120a",
+  "timestamp": 1776943397660,
+  "messages": [
+    {
+      "role": "user",
+      "content": "v"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776943397660
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776943397660
+  },
+  "version": "v1"
+}

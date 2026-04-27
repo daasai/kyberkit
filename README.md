@@ -39,6 +39,15 @@ Agent 的生命周期、权限沙箱 (Sandbox) 与 **三级工具门面** 的完
 - **轻量级轨迹追踪**: 利用 Node.js `AsyncLocalStorage` 实现零入侵的代码插桩，记录每一次决策 Span。
 - **本地轨迹仓库**: 所有运行记录以结构化数据存储在本地 SQLite 中，为后续的微调 (Fine-tuning) 积累核心语料。
 
+#### 本地轨迹与隐私（Telemetry）
+
+- 每个会话默认在 `.kyberkit/runtime/<agentId>.trajectory.sqlite` 写入 **turns / steps / trace_events** 三张表（可用环境变量关闭或脱敏）。
+- 环境变量：
+  - `KYBER_TELEMETRY_TRAJECTORY_ENABLED` — 设为 `false` 关闭轨迹落盘。
+  - `KYBER_TELEMETRY_TRAJECTORY_INCLUDE_CONTENT` — 设为 `false` 时事件载荷仅保留长度与 hash，不落原文。
+- REPL 内使用 **`/stats`** 查看当前 agent 在时间窗内的聚合指标；CLI：`bun run bin/kyberkit trajectory export [--since 7d]` 导出 JSONL 行便于 DuckDB / pandas 分析。
+- 数据**仅保存在本机**；当前版本不包含任何远端上报。
+
 ### 04 Intelligence | 智能增强层
 将模糊意图转化为稳健执行：
 - **确定性 DAG 执行引擎**: 采用 Kahn 算法对任务图进行拓扑排序，支持并行扇出与合并，预防逻辑循环。

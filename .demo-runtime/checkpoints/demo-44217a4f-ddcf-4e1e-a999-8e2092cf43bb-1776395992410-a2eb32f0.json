@@ -1,0 +1,21 @@
+{
+  "id": "demo-44217a4f-ddcf-4e1e-a999-8e2092cf43bb-1776395992410-a2eb32f0",
+  "agentId": "demo-44217a4f-ddcf-4e1e-a999-8e2092cf43bb",
+  "timestamp": 1776395992410,
+  "messages": [
+    {
+      "role": "user",
+      "content": "/memory list"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776395992410
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776395992410
+  },
+  "version": "v1"
+}

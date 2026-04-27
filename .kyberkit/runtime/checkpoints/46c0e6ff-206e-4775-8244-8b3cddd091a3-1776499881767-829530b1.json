@@ -1,0 +1,21 @@
+{
+  "id": "46c0e6ff-206e-4775-8244-8b3cddd091a3-1776499881767-829530b1",
+  "agentId": "46c0e6ff-206e-4775-8244-8b3cddd091a3",
+  "timestamp": 1776499881767,
+  "messages": [
+    {
+      "role": "user",
+      "content": "在吗？"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776499881767
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776499881767
+  },
+  "version": "v1"
+}

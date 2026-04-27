@@ -1,0 +1,21 @@
+{
+  "id": "9d8331a3-7251-4ff2-8596-f2de24d2e632-1776860102748-5166adb4",
+  "agentId": "9d8331a3-7251-4ff2-8596-f2de24d2e632",
+  "timestamp": 1776860102748,
+  "messages": [
+    {
+      "role": "user",
+      "content": "帮我分析/Users/shawn/Data/Kyberkit/spaces/default/data/省心租交易数据_全国_202503197319642467751310656.csv，输入交易量增长趋势，洞察其中的规律"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776860102748
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776860102748
+  },
+  "version": "v1"
+}

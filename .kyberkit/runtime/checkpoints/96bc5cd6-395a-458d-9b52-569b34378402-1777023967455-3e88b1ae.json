@@ -1,0 +1,21 @@
+{
+  "id": "96bc5cd6-395a-458d-9b52-569b34378402-1777023967455-3e88b1ae",
+  "agentId": "96bc5cd6-395a-458d-9b52-569b34378402",
+  "timestamp": 1777023967455,
+  "messages": [
+    {
+      "role": "user",
+      "content": "帮我分析'/Users/shawn/Data/Kyberkit/spaces/default/data/省心租交易数据_全国_202503197319642467751310656.csv',从运营增长维度,输出贝易转下一步的增长方案"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1777023967455
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1777023967455
+  },
+  "version": "v1"
+}

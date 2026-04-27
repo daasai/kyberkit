@@ -1,0 +1,21 @@
+{
+  "id": "demo-034281cf-a485-4418-a3be-acc68180ef28-1776395992423-15b8e509",
+  "agentId": "demo-034281cf-a485-4418-a3be-acc68180ef28",
+  "timestamp": 1776395992423,
+  "messages": [
+    {
+      "role": "user",
+      "content": "In one short sentence, summarize sprint2 capabilities."
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776395992423
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776395992423
+  },
+  "version": "v1"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "3ef26131-c681-4913-9ba4-feb70435b0cd-1776411923115-d34c1407",
+  "agentId": "3ef26131-c681-4913-9ba4-feb70435b0cd",
+  "timestamp": 1776411923115,
+  "messages": [
+    {
+      "role": "user",
+      "content": "介绍下你自己"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776411923115
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776411923115
+  },
+  "version": "v1"
+}

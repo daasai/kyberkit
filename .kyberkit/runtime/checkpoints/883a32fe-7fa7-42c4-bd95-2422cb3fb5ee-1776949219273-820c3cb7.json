@@ -1,0 +1,21 @@
+{
+  "id": "883a32fe-7fa7-42c4-bd95-2422cb3fb5ee-1776949219273-820c3cb7",
+  "agentId": "883a32fe-7fa7-42c4-bd95-2422cb3fb5ee",
+  "timestamp": 1776949219273,
+  "messages": [
+    {
+      "role": "user",
+      "content": "请在Workspace下创建一个文件：test.md , 里面写一句有哲理的话"
+    }
+  ],
+  "sessionSnapshot": {
+    "entries": [],
+    "timestamp": 1776949219273
+  },
+  "taskProgress": {},
+  "interruptionState": {
+    "kind": "none",
+    "interruptedAt": 1776949219273
+  },
+  "version": "v1"
+}
