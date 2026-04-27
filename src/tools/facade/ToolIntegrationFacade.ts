@@ -1,40 +1,45 @@
-import { ToolDefinition, ToolIntegrationFacade, ShellExecutor, MCPToolRegistry, SkillRegistry } from '../../types/tool.js';
+import {
+  ToolDefinition,
+  ToolIntegrationFacade,
+  ShellExecutor,
+  MCPToolRegistry,
+  SkillRegistry,
+} from '../../types/tool.js';
+import type { BuiltinToolRegistry } from '../builtin/BuiltinToolRegistry.js';
+import type { SkillMeta } from '../skills/SkillMeta.js';
 
 export class DefaultToolIntegrationFacade implements ToolIntegrationFacade {
   constructor(
     public readonly shell: ShellExecutor,
     public readonly mcp: MCPToolRegistry,
     public readonly skills: SkillRegistry,
+    public readonly builtins: BuiltinToolRegistry,
   ) {}
 
   /**
-   * Find a tool by name across all source registries.
-   * Resolution priority: Skill > MCP > Builtin (Shell)
+   * Resolve a tool: builtins → MCP → skills (skills remain for legacy transcripts / explicit invoke).
    */
   findTool(query: string): ToolDefinition | undefined {
-    // 1. Check Skills
-    const skill = this.skills.findSkill(query);
-    if (skill) return skill;
-    
-    // 2. Check MCP
+    const builtin = this.builtins.findTool(query);
+    if (builtin) return builtin;
+
     const mcpTool = this.mcp.findTool(query);
     if (mcpTool) return mcpTool;
 
-    // Shell tool etc. would be constructed here if it's represented as a `ToolDefinition`,
-    // but in Phase 0, shell commands might be directly handled differently, 
-    // or wrapped into a 'BashTool'. 
-    // Since Phase 0 spec mentions findTool should return SkillDefinition | MCPTool | null, 
-    // we return undefined here.
+    const skill = this.skills.findSkill(query);
+    if (skill) return skill;
+
     return undefined;
   }
 
   /**
-   * List all tools from all registries.
+   * Tools exposed to the model (builtins + MCP). Skills are injected via PromptAssembler only.
    */
   listAll(): ToolDefinition[] {
-    return [
-      ...this.skills.listSkills(),
-      ...this.mcp.listTools(),
-    ];
+    return [...this.builtins.listTools(), ...this.mcp.listTools()];
+  }
+
+  listSkillMetas(): SkillMeta[] {
+    return this.skills.listSkillMetas?.() ?? [];
   }
 }

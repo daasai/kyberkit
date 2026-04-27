@@ -34,7 +34,7 @@ describe('Command System', () => {
     // Test /help
     const helpRes = await registry.execute('/help', context);
     expect(helpRes.success).toBe(true);
-    expect(helpRes.output).toContain('Show all available commands');
+    expect(helpRes.output).toContain('可用命令');
     expect(helpRes.output).toContain('/cost');
 
     // Test /cost

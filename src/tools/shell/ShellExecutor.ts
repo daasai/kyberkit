@@ -11,21 +11,37 @@ export class DefaultShellExecutor implements ShellExecutor {
     const maxChars = options.maxResultSizeChars ?? 100_000;
 
     return new Promise((resolve, reject) => {
+      if (options.signal?.aborted) {
+        resolve({ stdout: '', stderr: '', exitCode: 1, interrupted: true });
+        return;
+      }
+
       // Use 'sh -c' for shell-like execution of arbitrary strings
       const child = spawn('sh', ['-c', command], {
         cwd: workingDir,
         env: { ...process.env },
         stdio: ['ignore', 'pipe', 'pipe'],
+        signal: options.signal,
       });
 
       let stdout = '';
       let stderr = '';
       let interrupted = false;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
 
-      // Handle timeout
-      const timeout = setTimeout(() => {
+      const onAbort = () => {
         interrupted = true;
         this.killProcess(child);
+        if (timeout) clearTimeout(timeout);
+        options.signal?.removeEventListener('abort', onAbort);
+        resolve({ stdout, stderr, exitCode: 1, interrupted: true });
+      };
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+
+      timeout = setTimeout(() => {
+        interrupted = true;
+        this.killProcess(child);
+        options.signal?.removeEventListener('abort', onAbort);
         resolve({ stdout, stderr, exitCode: 1, interrupted });
       }, timeoutMs);
 
@@ -49,14 +65,16 @@ export class DefaultShellExecutor implements ShellExecutor {
       });
 
       child.on('close', (code) => {
-        clearTimeout(timeout);
+        if (timeout) clearTimeout(timeout);
+        options.signal?.removeEventListener('abort', onAbort);
         if (!interrupted) {
           resolve({ stdout, stderr, exitCode: code ?? 1, interrupted: false });
         }
       });
 
       child.on('error', (err) => {
-        clearTimeout(timeout);
+        if (timeout) clearTimeout(timeout);
+        options.signal?.removeEventListener('abort', onAbort);
         reject(err);
       });
     });

@@ -48,6 +48,10 @@ export interface AssemblyContext {
   memoryContext?: string;
   /** Full reliability layer for advanced providers */
   reliability?: import('../agent/AgentLoop.js').ReliabilityLayer;
+  /** Latest user message text (natural language turn) for skill discovery. */
+  userTurnText?: string;
+  /** Pre-rendered active skill sections (from SkillDiscovery). */
+  skillContext?: string;
 }
 
 

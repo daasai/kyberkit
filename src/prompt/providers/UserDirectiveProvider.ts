@@ -8,7 +8,7 @@ import { PromptSectionProvider, AssemblyContext } from '../../types/prompt.js';
  */
 export class UserDirectiveProvider implements PromptSectionProvider {
   readonly id = 'user_directives';
-  readonly priority = 2;
+  readonly priority = 3;
   readonly cacheable = true;
   readonly source = 'user' as const;
 

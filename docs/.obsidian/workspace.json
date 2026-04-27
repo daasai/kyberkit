@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "v2-upgrade-plan.md",
+                "file": "hermes/agent-design-manual-ch01.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "v2-upgrade-plan"
+              "title": "agent-design-manual-ch01"
             }
           }
         ]
@@ -78,7 +78,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 284.5
+    "width": 302.5
   },
   "right": {
     "id": "7479c3582673b3d6",
@@ -156,13 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "v2-upgrade-plan.md",
+                "file": "hermes/agent-design-manual-ch01.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "v2-upgrade-plan 的大纲"
+              "title": "agent-design-manual-ch01 的大纲"
             }
           }
         ],
@@ -185,32 +185,35 @@
   },
   "active": "8274e2e1046ac467",
   "lastOpenFiles": [
-    "sprint3-design-spec.zh.md",
-    "reviews/sprint2-implementation-review.md",
-    "reviews",
-    "sprint2-implementation-review.md",
-    "sprint2-design-spec.zh.md",
-    "kyberkit-2.0.md",
-    "deepcc/08-prompt-builder-deep-dive.md",
-    "README.md",
-    "sprint1-design-spec.zh.md",
-    "deepcc/06-agentic-loop-deep-dive.md",
-    "sprint1-design-spec.md",
-    "implementation_plan.md",
-    "v2-upgrade-plan.md",
-    "deepcc/07-llm-gateway-deep-dive.md",
+    "Kyberkit3.0-product-strategy.md",
+    "Kyberkit3.0-memo.md",
+    "reviews/Kyberkit3.0-memo.md",
+    "reviews/Kyberkit3.0-memo",
+    "track-b-implementation-notes.md",
+    "sprint5-design-spec.zh.md",
+    "decisions/0001-track-strategy-and-multitenancy-deferral.md",
+    "decisions",
+    "hermes/agent-design-manual-ch11-appendix.md",
+    "hermes/agent-design-manual-ch08-10.md",
+    "hermes/agent-design-manual-ch07.md",
+    "hermes/agent-design-manual-ch06.md",
+    "hermes/agent-design-manual-ch05.md",
+    "hermes/agent-design-manual-outline.md",
+    "hermes/agent-design-manual-ch04.md",
+    "hermes/agent-design-manual-ch02.md",
+    "hermes/agent-design-manual-ch03.md",
+    "hermes/agent-design-manual-ch01.md",
+    "Clippings/Hermes Agent 架构全解：自进化单体智能体的学习循环与四层内存设计-腾讯云开发者社区-腾讯云.md",
+    "deepcc/09-tool-execution-engine-deep-dive.md",
+    "Clippings",
+    "hermes/output-control-engineering.md",
+    "hermes/prompt-architecture.md",
+    "hermes/agent-runtime-architecture.md",
+    "sprint3.5-design-spec.zh.md",
+    "product-experience-memo.md",
+    "deepcc/03-tool-and-capability-system.md",
     "deepcc/14-repl-terminal-ui-deep-dive.md",
     "deepcc/13-global-state-hook-system-deep-dive.md",
-    "deepcc/12-parallel-task-framework-deep-dive.md",
-    "deepcc/11-memory-system-deep-dive.md",
-    "deepcc/10-context-compression-engine-deep-dive.md",
-    "deepcc/09-tool-execution-engine-deep-dive.md",
-    "deepcc/README.md",
-    "deepcc/04-agentic-loop-deep-dive.md",
-    "deepcc/00-codebase-highmap.md",
-    "deepcc/codebase_highmap.md",
-    "deepcc/05-terminal-reactive-ui.md",
-    "deepcc/04-context-and-workspace-sensing.md",
-    "deepcc/03-tool-and-capability-system.md"
+    "reviews"
   ]
 }

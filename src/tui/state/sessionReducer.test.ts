@@ -119,6 +119,28 @@ describe('replReducer — agentEvent: usage', () => {
     const s = reduce(withActiveUserInput(), { kind: 'agentEvent', event: e });
     expect(s.cumulative).toEqual(cumulative);
   });
+
+  it('never lowers turnCount when usage carries a stale turnCount', () => {
+    const s0 = reduce(withActiveUserInput(), {
+      kind: 'agentEvent',
+      event: { type: 'turn_complete', turnNumber: 1, stopReason: 'tool_use', content: [] },
+    });
+    expect(s0.cumulative.turnCount).toBe(1);
+    const e: AgentEvent = {
+      type: 'usage',
+      usage: { inputTokens: 10, outputTokens: 5 },
+      cumulative: {
+        totalInputTokens: 10,
+        totalOutputTokens: 5,
+        totalCacheCreationTokens: 0,
+        totalCacheReadTokens: 0,
+        turnCount: 0,
+      },
+    };
+    const s = reduce(s0, { kind: 'agentEvent', event: e });
+    expect(s.cumulative.turnCount).toBe(1);
+    expect(s.cumulative.totalInputTokens).toBe(10);
+  });
 });
 
 describe('replReducer — agentEvent: turn_complete', () => {
@@ -128,6 +150,16 @@ describe('replReducer — agentEvent: turn_complete', () => {
     expect(s.turns[0]!.status).toBe('done');
     expect(s.turns[0]!.stopReason).toBe('end_turn');
     expect(s.currentTurnNumber).toBeNull();
+    expect(s.cumulative.turnCount).toBe(1);
+  });
+
+  it('keeps current turn open on tool_use and bumps turnCount', () => {
+    const e: AgentEvent = { type: 'turn_complete', turnNumber: 1, stopReason: 'tool_use', content: [] };
+    const s = reduce(withActiveUserInput(), { kind: 'agentEvent', event: e });
+    expect(s.turns[0]!.status).toBe('streaming');
+    expect(s.turns[0]!.stopReason).toBe('tool_use');
+    expect(s.currentTurnNumber).toBe(1);
+    expect(s.cumulative.turnCount).toBe(1);
   });
 });
 
@@ -156,5 +188,145 @@ describe('replReducer — noop when no active turn', () => {
     const e: AgentEvent = { type: 'text_delta', text: 'orphan' };
     const s = reduce(s0, { kind: 'agentEvent', event: e });
     expect(s.turns).toHaveLength(0);
+  });
+});
+
+describe('replReducer — task_plan / task_narration / displayMode', () => {
+  it('stores task_plan on the active turn', () => {
+    const e: AgentEvent = {
+      type: 'task_plan',
+      source: 'model',
+      steps: [
+        { id: 's0', title: 'Step A', status: 'active' },
+        { id: 's1', title: 'Step B', status: 'pending' },
+      ],
+    };
+    const s = reduce(withActiveUserInput(), { kind: 'agentEvent', event: e });
+    expect(s.turns[0]!.taskPlan?.source).toBe('model');
+    expect(s.turns[0]!.taskPlan?.steps).toHaveLength(2);
+  });
+
+  it('appends task_narration lines', () => {
+    const e: AgentEvent = { type: 'task_narration', text: '读取 data.csv', kind: 'progress' };
+    const s = reduce(withActiveUserInput(), { kind: 'agentEvent', event: e });
+    expect(s.turns[0]!.narrations).toHaveLength(1);
+    expect(s.turns[0]!.narrations[0]!.text).toBe('读取 data.csv');
+  });
+
+  it('toggles displayMode', () => {
+    const s = reduce(initialState(), { kind: 'toggleDisplayMode' });
+    expect(s.displayMode).toBe('verbose');
+  });
+
+  it('stores taskId and mission from task_plan', () => {
+    const e: AgentEvent = {
+      type: 'task_plan',
+      source: 'model',
+      steps: [{ id: 's0', title: 'Step A', status: 'active' }],
+      taskId: 'task-123',
+      mission: '重构 AuthService',
+    };
+    const s = reduce(withActiveUserInput(), { kind: 'agentEvent', event: e });
+    expect(s.turns[0]!.taskPlan?.taskId).toBe('task-123');
+    expect(s.turns[0]!.taskPlan?.mission).toBe('重构 AuthService');
+  });
+
+  it('attaches task_complete to the active turn', () => {
+    const e: AgentEvent = {
+      type: 'task_complete',
+      taskId: 'task-xyz',
+      mission: '写一个脚本',
+      startedAt: 1_000,
+      completedAt: 5_000,
+      turnsInTask: 2,
+      toolCalls: 4,
+      errors: 0,
+      stopReason: 'end_turn',
+    };
+    const s = reduce(withActiveUserInput(), { kind: 'agentEvent', event: e });
+    expect(s.turns[0]!.taskComplete?.taskId).toBe('task-xyz');
+    expect(s.turns[0]!.taskComplete?.turnsInTask).toBe(2);
+  });
+
+  it('memoryToastAdd enqueues and dedupes by entryId', () => {
+    let s = initialState();
+    s = reduce(s, {
+      kind: 'memoryToastAdd',
+      toast: {
+        id: 't1',
+        entryId: 'm-1',
+        title: '第一条',
+        category: 'user',
+        shownAt: 100,
+      },
+    });
+    s = reduce(s, {
+      kind: 'memoryToastAdd',
+      toast: {
+        id: 't2',
+        entryId: 'm-2',
+        title: '第二条',
+        category: 'project',
+        shownAt: 200,
+      },
+    });
+    expect(s.memoryToasts).toHaveLength(2);
+    s = reduce(s, {
+      kind: 'memoryToastAdd',
+      toast: {
+        id: 't3',
+        entryId: 'm-1',
+        title: '第一条（更新）',
+        category: 'user',
+        shownAt: 300,
+      },
+    });
+    expect(s.memoryToasts).toHaveLength(2);
+    expect(s.memoryToasts.map(t => t.id)).toEqual(['t2', 't3']);
+  });
+
+  it('memoryToastRevertStart / revertDone drive lifecycle flags', () => {
+    let s = initialState();
+    s = reduce(s, {
+      kind: 'memoryToastAdd',
+      toast: {
+        id: 't1',
+        entryId: 'm-1',
+        title: 'foo',
+        category: 'user',
+        shownAt: 0,
+      },
+    });
+    s = reduce(s, { kind: 'memoryToastRevertStart', id: 't1' });
+    expect(s.memoryToasts[0]!.reverting).toBe(true);
+    s = reduce(s, { kind: 'memoryToastRevertDone', id: 't1' });
+    expect(s.memoryToasts[0]!.reverting).toBe(false);
+    expect(s.memoryToasts[0]!.reverted).toBe(true);
+    s = reduce(s, { kind: 'memoryToastDismiss', id: 't1' });
+    expect(s.memoryToasts).toHaveLength(0);
+  });
+
+  it('attaches turn_summary to the active turn', () => {
+    const e: AgentEvent = {
+      type: 'turn_summary',
+      summary: {
+        taskId: 'task-xyz',
+        mission: '写一个脚本',
+        completedAt: 5_000,
+        durationMs: 4_000,
+        deliverables: [],
+        steps: [],
+        assets: [],
+        metrics: {
+          toolCallsTotal: 2,
+          toolCallsFailed: 0,
+          tokensInput: 10,
+          tokensOutput: 20,
+        },
+      },
+    };
+    const s = reduce(withActiveUserInput(), { kind: 'agentEvent', event: e });
+    expect(s.turns[0]!.turnSummary?.taskId).toBe('task-xyz');
+    expect(s.turns[0]!.turnSummary?.metrics.tokensOutput).toBe(20);
   });
 });

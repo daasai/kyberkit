@@ -321,11 +321,12 @@ describe('buildReliability', () => {
   });
 
   it('real mode: returns all four components and no cleanup', async () => {
-    const { reliability, cleanup } = await buildReliability('real', {
+    const { reliability, cleanup, rootDir } = await buildReliability('real', {
       rootDir: tempDir,
       agentId: 'test-agent',
     });
 
+    expect(rootDir).toBe(tempDir);
     expect(reliability.memory).toBeDefined();
     expect(reliability.checkpoint).toBeDefined();
     expect(reliability.exceptionHandler).toBeDefined();
@@ -336,11 +337,12 @@ describe('buildReliability', () => {
   });
 
   it('inmemory mode: returns all four components and a cleanup function', async () => {
-    const { reliability, cleanup } = await buildReliability('inmemory', {
+    const { reliability, cleanup, rootDir } = await buildReliability('inmemory', {
       rootDir: tempDir,
       agentId: 'test-agent',
     });
 
+    expect(rootDir).not.toBe(tempDir);
     expect(reliability.memory).toBeDefined();
     expect(reliability.checkpoint).toBeDefined();
     expect(reliability.exceptionHandler).toBeDefined();

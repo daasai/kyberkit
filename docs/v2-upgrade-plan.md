@@ -1,5 +1,7 @@
 # KyberKit v2.0 升级实施计划
 
+> **延伸阅读**: 用户交互体验改进方案见 [sprint3.5-design-spec.zh.md](./sprint3.5-design-spec.zh.md) — 基于 UAT 反馈的感知契约设计，不改动本文件 Sprint 编排，作为 Sprint 3 TUI 与 Sprint 5 Hook 实现时的产品参考。
+
 > **版本**: 2.0
 > **基于**: 14 章 DeepCC 逆向工程综合分析 + Hermes Agent 参考
 > **用户决策**: UI = TUI (Ink) / 记忆提取 = 全自动 / 模型 = 仅 Anthropic (Day 1)
@@ -13,8 +15,8 @@ Sprint 1 (流式基础设施)     Step 1-3    ✅ Agent 可流式运行
 Sprint 2 (用户资产体系)     Step 4-6    ✅ 用户可积累 Skills/Memories/Prompts
 Sprint 3 (TUI 交互层)      Step 7      ✅ 终端 REPL 可用
 Sprint 4 (长对话可靠性)     Step 8-10   ✅ 上下文压缩 + 记忆自动提取 + Markdown LTM
-Sprint 5 (扩展性)          Step 11-13  ← Prompt Cache + Hook + 并行工具
-Sprint 6 (多 Agent)        Step 14-15  ← Coordinator + TUI 增强
+Sprint 5 (Track B 资产闭环)  Step B1-B5  ✅ 见 `sprint5-design-spec.zh.md`
+Sprint 6+ (Track A / C)     Step 11-15  ← TBD：Track B 完成后再定（Prompt Cache / Hook / 并行 / Coordinator）
 ```
 
 每个 Sprint 结束后系统可独立运行 & 所有测试通过。
@@ -285,24 +287,29 @@ bin/kyberkit
 
 ---
 
-## Sprint 5: 扩展性 (Step 11-13)
+## Sprint 5: Track B — 资产演进闭环 (Step B1–B5) ✅
 
-### Step 11: Prompt Cache 优化
-- AnthropicProvider cache_control 支持
-- PromptAssembler cacheBreakpoints 输出
+> 决策与范围见 [decisions/0001-track-strategy-and-multitenancy-deferral.md](./decisions/0001-track-strategy-and-multitenancy-deferral.md)。多租户延至 v3.0；本 Sprint 为默认单工作区。
 
-### Step 12: Hook 系统
-- 三层 Hook: Internal / Event / User Shell
+| Step | 交付 | 状态 |
+|------|------|------|
+| B1 | Skill 半自动建议（`SkillSuggestionRunner` + TUI 卡片 + `skill.*` 事件） | ✅ |
+| B2 | `TurnSummary` 资产 2s 收尾窗口（`memory.*` / `skill.suggested` / `permit.persistent_recorded`） | ✅ |
+| B3 | `MemoryProvider` + BM25-lite 召回 L3 记忆 | ✅ |
+| B4 | `WorkspaceGrowthStore` + `AssetGrowthBanner` 近 7 天累计 | ✅ |
+| B5 | `PermitStore` `permit.yaml` 持久化；`/permit add|revoke`；批量 `p` 持久授权 | ✅ |
 
-### Step 13: 并行工具执行
-- ConcurrentToolExecutor (Promise.allSettled)
+实现细节与数据流见 [sprint5-design-spec.zh.md](./sprint5-design-spec.zh.md)。
 
 ---
 
-## Sprint 6+: 多 Agent (Step 14-15)
+## 后续 (Track A / C，待规划)
 
-### Step 14: Coordinator Mode
-### Step 15: TUI 增强 (Transcript / 搜索 / 后台任务)
+原 Step 11–15 保留为能力清单，**在 Track B 发布并收集数据后再定 Sprint 边界**：
+
+- **Track A（成本与扩展）**: Prompt Cache、完整 Hook 三层、并行工具、成本细化
+- **Track C（多 Agent / 场景）**: Coordinator、TUI 搜索/后台、跨会话记忆冲突
+- **v3.0**: 多租户 / 独立 workspace 运行时
 
 ---
 

@@ -13,6 +13,8 @@ export interface ShellOptions {
   sandbox?: boolean;
   /** Maximum result size in characters */
   maxResultSizeChars?: number;
+  /** When aborted, the shell child is terminated (sibling bash cancel, user cancel). */
+  signal?: AbortSignal;
 }
 
 /**
@@ -53,6 +55,8 @@ export interface MCPToolRegistry {
 export interface SkillRegistry {
   findSkill(name: string): ToolDefinition | undefined;
   listSkills(): ToolDefinition[];
+  /** Metadata for skill discovery (optional for test mocks). */
+  listSkillMetas?(): import('../tools/skills/SkillMeta.js').SkillMeta[];
 }
 
 /**
@@ -60,7 +64,10 @@ export interface SkillRegistry {
  */
 export interface ToolIntegrationFacade {
   findTool(query: string): ToolDefinition | undefined;
+  /** Tools sent to the LLM API (builtins + MCP; excludes skills). */
   listAll(): ToolDefinition[];
+  /** Skill metadata for discovery (optional). */
+  listSkillMetas?(): import('../tools/skills/SkillMeta.js').SkillMeta[];
 }
 
 
@@ -95,6 +102,8 @@ export interface ToolContext {
  */
 export interface ToolUseContext extends ToolContext {
   readonly callId: string;
+  /** Present when this tool is part of a parallel bash batch with sibling-cancel semantics. */
+  readonly batchAbortSignal?: AbortSignal;
 }
 
 /**
@@ -135,4 +144,16 @@ export interface ToolDefinition<Input = unknown, Output = unknown> {
   readonly timeoutMs?: number;
   /** 结果大小上限 (chars) */
   readonly maxResultSizeChars: number;
+
+  /** Optional: ToolSearch / discovery hint (DeepCC). */
+  readonly searchHint?: string;
+  /** Optional: interrupt behavior for streaming executor. */
+  readonly interruptBehavior?: 'cancel' | 'block';
+}
+
+/** Pre-resolved tool row for Anthropic API (description string, no async). */
+export interface ResolvedToolForApi {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: import('zod').ZodType;
 }

@@ -56,7 +56,14 @@ describe('MarkdownMemoryStore', () => {
     const e = entry();
     await store.write(e);
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({ tierId: 'L3', entryId: e.id });
+    expect(events[0]).toMatchObject({
+      tierId: 'L3',
+      entryId: e.id,
+      category: e.category,
+      title: e.title,
+      source: e.source,
+    });
+    expect(typeof events[0]!.path).toBe('string');
   });
 
   it('list() discovers files across category subdirs and skips MEMORY.md', async () => {

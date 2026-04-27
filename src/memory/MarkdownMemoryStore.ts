@@ -68,7 +68,14 @@ export class MarkdownMemoryStore {
     await rename(tmp, path);
 
     await this.refreshIndex();
-    this.eventBus.emit('memory.written', { tierId: 'L3', entryId: entry.id });
+    this.eventBus.emit('memory.written', {
+      tierId: 'L3',
+      entryId: entry.id,
+      category: entry.category,
+      title: entry.title,
+      path,
+      source: entry.source,
+    });
 
     return { ...entry, path };
   }

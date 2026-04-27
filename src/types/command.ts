@@ -17,6 +17,11 @@ export interface CommandResult {
    * Internal commands like /help usually intercept the loop and don't call the LLM.
    */
   continueConversation: boolean;
+  /**
+   * When set, the session appends this as a user message and runs the agent loop
+   * (used for /skill-name skill injection).
+   */
+  followUpWithAgent?: { userText: string };
 }
 
 /** Context for command execution */
@@ -27,6 +32,8 @@ export interface CommandContext {
   assets?: AssetManifest;
   /** Current working directory */
   cwd: string;
+  /** Current agent id (for trajectory path /stats). */
+  agentId?: string;
 }
 
 /** Interface for an internal slash command */

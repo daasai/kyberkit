@@ -5,6 +5,7 @@ import type { TurnState } from '../state/sessionReducer.js';
 
 interface Props {
   turns: TurnState[];
+  displayMode: 'compact' | 'verbose';
 }
 
 /**
@@ -17,7 +18,7 @@ interface Props {
  * The active (streaming) turn is rendered outside <Static> to allow
  * incremental updates on every text_delta event.
  */
-export const TranscriptView: React.FC<Props> = ({ turns }) => {
+export const TranscriptView: React.FC<Props> = ({ turns, displayMode }) => {
   const completed = turns.filter(t => t.status === 'done' || t.status === 'error');
   const active = turns.find(
     t => t.status === 'streaming' || t.status === 'executing_tools',
@@ -26,9 +27,9 @@ export const TranscriptView: React.FC<Props> = ({ turns }) => {
   return (
     <Box flexDirection="column" flexGrow={1}>
       <Static items={completed}>
-        {t => <TurnRenderer key={t.turnNumber} turn={t} />}
+        {t => <TurnRenderer key={t.turnNumber} turn={t} displayMode={displayMode} />}
       </Static>
-      {active && <TurnRenderer key={active.turnNumber} turn={active} />}
+      {active && <TurnRenderer key={active.turnNumber} turn={active} displayMode={displayMode} />}
     </Box>
   );
 };

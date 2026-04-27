@@ -1,4 +1,4 @@
-import { ToolDefinition } from './tool.js';
+import { ResolvedToolForApi, ToolDefinition } from './tool.js';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -17,6 +17,10 @@ export interface ChatRequest {
   systemPrompt?: string;
   maxTokens?: number;
   tools?: ToolDefinition[];
+  /** When set, the provider maps these to the API instead of resolving from tools[]. */
+  resolvedTools?: ResolvedToolForApi[];
+  /** Abort an in-flight model stream (e.g. turn timeout). */
+  abortSignal?: AbortSignal;
   temperature?: number;
 }
 

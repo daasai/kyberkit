@@ -1,6 +1,7 @@
 import { TypedEventBus } from '../events/EventBus.js';
 import type { KyberEvents } from '../types/events.js';
 import type { MCPToolRegistry, ToolIntegrationFacade } from '../types/tool.js';
+import { ToolRuleChecker } from '../tools/ToolRuleChecker.js';
 import type { ModelProvider } from '../types/model.js';
 import { PermissionSandbox } from '../permission/PermissionSandbox.js';
 import type { KyberConfig, MCPServerConfig } from '../types/config.js';
@@ -9,6 +10,9 @@ import { DefaultShellExecutor } from '../tools/shell/ShellExecutor.js';
 import { DefaultMCPToolRegistry } from '../tools/mcp/MCPToolRegistry.js';
 import { DefaultSkillRegistry } from '../tools/skills/SkillRegistry.js';
 import { DefaultToolIntegrationFacade } from '../tools/facade/ToolIntegrationFacade.js';
+import { createBuiltinTools } from '../tools/builtin/createBuiltinTools.js';
+import { BuiltinToolRegistry } from '../tools/builtin/BuiltinToolRegistry.js';
+import { SkillInvokeCommand } from '../commands/builtin/SkillInvokeCommand.js';
 import { AnthropicProvider } from '../model/AnthropicProvider.js';
 import { DefaultAgentInstance } from '../agent/AgentInstance.js';
 import { ConfigError } from '../types/errors.js';
@@ -20,16 +24,22 @@ import type { AgentLoopDeps, ReliabilityLayer } from '../agent/AgentLoop.js';
 import { WorkspaceRegistry } from './WorkspaceRegistry.js';
 import type { WorkspaceInstance } from './WorkspaceInstance.js';
 import { join } from 'path';
+import { SkillSuggestionRunner } from '../skills/SkillSuggestionRunner.js';
+import { WorkspaceGrowthStore } from '../observability/WorkspaceGrowthStore.js';
 import { ensureWorkspaceSeed, resolveWorkspacePaths } from './WorkspaceBootstrap.js';
 import { mkdir } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { AgentSession, buildReliability } from './AgentSession.js';
+import { TrajectoryRecorder } from '../observability/TrajectoryRecorder.js';
 import type { CreateSessionOptions } from './AgentSession.js';
 import { ContextCompressor } from '../compression/ContextCompressor.js';
 import { CompactionGuardMiddleware } from '../agent/middleware/CompactionGuardMiddleware.js';
 import { MemoryTriggerMiddleware } from '../agent/middleware/MemoryTriggerMiddleware.js';
+import { NarratorMiddleware } from '../agent/middleware/NarratorMiddleware.js';
 import { SessionMemoryExtractor } from '../memory/extractors/SessionMemoryExtractor.js';
 import { LongTermMemoryExtractor } from '../memory/extractors/LongTermMemoryExtractor.js';
+import type { CanAuthorizeBatchFn, CanUseToolFn } from '../permission/ToolPermissionGate.js';
+import { PermitStore } from '../permission/PermitStore.js';
 
 export class KyberRuntime {
   private bus!: TypedEventBus<KyberEvents>;
@@ -39,6 +49,16 @@ export class KyberRuntime {
   private config!: KyberConfig;
   private workspaceRegistry!: WorkspaceRegistry;
   private activeWorkspaceId: string = 'default';
+  private workspaceGrowth: WorkspaceGrowthStore | null = null;
+
+  /** Mutable reference shared by all `AgentLoopDeps` from this runtime (TUI tool prompts). */
+  private readonly toolPermissionOutlet: {
+    canUseTool?: CanUseToolFn;
+    canAuthorizeBatch?: CanAuthorizeBatchFn;
+  } = {};
+
+  /** Sprint 3.5 §4.2 — runtime-scoped grant store shared across sessions. */
+  private permitStore!: PermitStore;
 
 
   /**
@@ -52,6 +72,15 @@ export class KyberRuntime {
 
     // 2. Init event bus
     this.bus = new TypedEventBus<KyberEvents>();
+    this.permitStore = new PermitStore({
+      onPersistentChanged: (g) => {
+        this.bus.emit('permit.persistent_recorded', {
+          toolName: g.toolName,
+          maxLevel: g.maxLevel,
+        });
+        this.workspaceGrowth?.record('permit', 1);
+      },
+    });
 
     // 3. Build permission sandbox
     this.sandbox = new PermissionSandbox({
@@ -97,7 +126,8 @@ export class KyberRuntime {
       }
     }
 
-    this.tools = new DefaultToolIntegrationFacade(shell, mcp as unknown as MCPToolRegistry, skills);
+    const builtins = new BuiltinToolRegistry(createBuiltinTools(shell, this.sandbox));
+    this.tools = new DefaultToolIntegrationFacade(shell, mcp as unknown as MCPToolRegistry, skills, builtins);
 
     // 6. Init Workspaces
     const pathInfo = resolveWorkspacePaths({
@@ -124,8 +154,34 @@ export class KyberRuntime {
     });
     this.activeWorkspaceId = pathInfo.workspaceId;
 
+    // Track B — cross-session growth counters + durable permits
+    const kRoot = join(pathInfo.userRoot, '.kyberkit');
+    const growthPath = join(kRoot, 'growth.sqlite');
+    await WorkspaceGrowthStore.ensurePath(growthPath);
+    this.workspaceGrowth = new WorkspaceGrowthStore(growthPath);
+    this.permitStore.setPersistencePath(join(kRoot, 'permit.yaml'));
+    this.permitStore.loadFromDisk();
+
+    this.bus.on('memory.written', (p) => {
+      if (p.source === 'auto') this.workspaceGrowth?.record('memory', 1);
+    });
+    this.bus.on('skill.adopted', () => {
+      this.workspaceGrowth?.record('skill', 1);
+    });
+
+    // Sprint 3.5 §4.3 — make the runtime-scoped PermitStore visible to /permit.
+    this.getActiveWorkspace().attachPermitStore(() => this.permitStore);
+
+    for (const meta of this.tools.listSkillMetas?.() ?? []) {
+      this.getActiveWorkspace().commandRegistry.register(
+        new SkillInvokeCommand(meta.name, meta.description, meta.body),
+      );
+    }
+
     // 7. Ready
-    console.log(`[KyberKit] Runtime bootstrapped. Loaded ${this.tools.listAll().length} total tools.`);
+    console.log(
+      `[KyberKit] Runtime bootstrapped. Loaded ${this.tools.listAll().length} model tools; ${this.tools.listSkillMetas?.().length ?? 0} skills.`,
+    );
   }
 
   /** Gets the active workspace instance. */
@@ -153,6 +209,32 @@ export class KyberRuntime {
 
   /** Alias for getBus() — preferred by TUI useSession hook (D5). */
   get eventBus(): TypedEventBus<KyberEvents> { return this.bus; }
+
+  /**
+   * Registers an interactive tool permission handler (e.g. Ink Y/N).
+   * Pass `undefined` to clear. Wired into each session's `AgentLoopDeps.toolPermission`.
+   */
+  setToolPermissionHandler(handler?: CanUseToolFn): void {
+    this.toolPermissionOutlet.canUseTool = handler;
+  }
+
+  /** Sprint 3.5 §4.2 — batch authorization handler (TUI card). */
+  setBatchAuthHandler(handler?: CanAuthorizeBatchFn): void {
+    this.toolPermissionOutlet.canAuthorizeBatch = handler;
+  }
+
+  /** Exposed for /permit command and IdentityBand. */
+  getPermitStore(): PermitStore {
+    return this.permitStore;
+  }
+
+  /** Last 7 days of asset growth (memories / skills / permits) for the workspace user root. */
+  getAssetGrowth7d(): { memories: number; skills: number; permits: number } {
+    if (!this.workspaceGrowth) {
+      return { memories: 0, skills: 0, permits: 0 };
+    }
+    return this.workspaceGrowth.aggregateSince(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  }
 
   /** Returns the CommandRegistry for the given workspace (or active). Used by TUI autocomplete. */
   getCommandRegistry(workspaceId?: string): import('../commands/CommandRegistry.js').CommandRegistry | undefined {
@@ -182,7 +264,8 @@ export class KyberRuntime {
   createMiddlewarePipeline(): MiddlewarePipeline {
     return new MiddlewarePipeline()
       .use(new TokenCounterMiddleware())
-      .use(new ContentAccumulatorMiddleware());
+      .use(new ContentAccumulatorMiddleware())
+      .use(new NarratorMiddleware());
   }
 
   /**
@@ -207,6 +290,7 @@ export class KyberRuntime {
 
     let reliability: ReliabilityLayer;
     let cleanup: (() => Promise<void>) | undefined;
+    let runtimeRootDir = join(process.cwd(), '.kyberkit', 'runtime');
 
     if (opts.reliability && typeof opts.reliability === 'object') {
       reliability = opts.reliability as ReliabilityLayer;
@@ -214,12 +298,21 @@ export class KyberRuntime {
       const mode = (opts.reliability as string | undefined) ??
         (process.env.KYBER_RELIABILITY === 'inmemory' ? 'inmemory' : 'real');
       const rootDir = join(process.cwd(), '.kyberkit', 'runtime');
+      // Sprint 3.5 §2.3 — durable memories write to the workspace user root so that
+      // AssetRegistry / PromptAssembler / future `/assets` surface them consistently.
+      // `inmemory` mode intentionally omits this and uses the temp root for isolation.
+      const activeWorkspace = this.getActiveWorkspace();
+      const memoriesDir =
+        mode === 'inmemory'
+          ? undefined
+          : join(activeWorkspace.config.assetPaths.user, 'memories');
       const result = await buildReliability(
         mode === 'inmemory' ? 'inmemory' : 'real',
-        { rootDir, agentId: sessionId },
+        { rootDir, agentId: sessionId, memoriesDir },
       );
       reliability = result.reliability;
       cleanup = result.cleanup;
+      runtimeRootDir = result.rootDir;
     }
 
     const pipeline = opts.middleware ?? this.createMiddlewarePipeline();
@@ -229,7 +322,27 @@ export class KyberRuntime {
     });
     const deps = this.createAgentLoopDeps(agent, reliability, pipeline);
 
-    return new AgentSession(sessionId, agent, deps, reliability, cleanup);
+    const trajEnabled = this.config.telemetry.trajectory.enabled !== false;
+    const trajectory =
+      trajEnabled
+        ? new TrajectoryRecorder(join(runtimeRootDir, `${sessionId}.trajectory.sqlite`), {
+            includeContent: this.config.telemetry.trajectory.includeContent !== false,
+            agentId: sessionId,
+          })
+        : undefined;
+
+    const userRoot = this.getActiveWorkspace().config.assetPaths.user;
+    const skillRunner = new SkillSuggestionRunner({
+      model: this.model,
+      compactModel: this.config.model.compactModel ?? this.config.model.name,
+      fallbackModel: this.config.model.name,
+      eventBus: this.bus,
+      skillsDir: join(userRoot, 'skills'),
+    });
+
+    return new AgentSession(sessionId, agent, deps, reliability, cleanup, trajectory, {
+      skillSuggestion: opts.skillSuggestion ?? skillRunner,
+    });
   }
 
   /**
@@ -271,6 +384,7 @@ export class KyberRuntime {
       : undefined;
 
     const resolvedPipeline = pipeline ?? this.createMiddlewarePipeline();
+    let memoryTrigger: MemoryTriggerMiddleware | undefined;
     if (sessionMemoryInstance) {
       const longTerm =
         typeof (reliability.memory as any).getLongTermMemory === 'function'
@@ -286,7 +400,7 @@ export class KyberRuntime {
           })
         : undefined;
 
-      const memoryTrigger = new MemoryTriggerMiddleware({
+      memoryTrigger = new MemoryTriggerMiddleware({
         sessionExtractor: new SessionMemoryExtractor({
           model: this.model,
           compactModel: this.config.model.compactModel,
@@ -317,6 +431,12 @@ export class KyberRuntime {
       commandRegistry: workspace.commandRegistry,
       workspace: workspace,
       compactionGuard,
+      memoryTrigger,
+      turnTimeoutMs: this.config.agent.turnTimeoutMs,
+      toolRuleChecker: new ToolRuleChecker(this.config.tools.deny),
+      toolPermission: this.toolPermissionOutlet,
+      permitStore: this.permitStore,
+      eventBus: this.bus,
     };
 
   }

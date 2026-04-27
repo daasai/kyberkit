@@ -36,17 +36,18 @@ export const KyberConfigSchema = z.object({
   memory: z.object({
     sessionTokenThreshold: z.number().default(4000),
     sessionToolCallThreshold: z.number().default(8),
-    sessionTurnThreshold: z.number().default(5),
+    /** After each completed assistant turn by default, so L2 notes appear on the next turn. */
+    sessionTurnThreshold: z.number().default(1),
     ltmTurnCooldown: z.number().default(3),
     enabled: z.boolean().default(true),
     writeScope: z.enum(['user', 'workspace', 'project']).default('project'),
   }).default({}),
   permissions: z.object({
-    allowed: z.array(z.string()).default(['read_fs', 'exec_shell', 'read_net', 'read_env']),
+    allowed: z.array(z.string()).default(['read_fs', 'write_fs', 'exec_shell', 'read_net', 'read_env']),
     denied: z.array(z.string()).default([]),
     allowedPaths: z.array(z.string()).default(['./']),
     allowedDomains: z.array(z.string()).default([]),
-  }).default({ allowed: ['read_fs', 'exec_shell', 'read_net', 'read_env'], denied: [], allowedPaths: ['./'], allowedDomains: [] }),
+  }).default({ allowed: ['read_fs', 'write_fs', 'exec_shell', 'read_net', 'read_env'], denied: [], allowedPaths: ['./'], allowedDomains: [] }),
   mcp: z.object({
     servers: z.array(z.object({
       name: z.string(),
@@ -60,11 +61,28 @@ export const KyberConfigSchema = z.object({
   skills: z.object({
     paths: z.array(z.string()).default(['./skills']),
   }).default({ paths: ['./skills'] }),
+  /** Tool permission rules (deny wins; evaluated before hooks). */
+  tools: z.object({
+    deny: z.array(z.object({ tool: z.string(), pattern: z.string() })).default([]),
+  }).default({ deny: [] }),
   agent: z.object({
     name: z.string().default('default'),
     systemPrompt: z.string().optional(),
     systemPromptFile: z.string().optional(),
-  }).default({ name: 'default' }),
+    /** Max time for a single model stream (ms). */
+    turnTimeoutMs: z.number().default(120_000),
+  }).default({ name: 'default', turnTimeoutMs: 120_000 }),
+  /** Local-only analytics (SQLite under .kyberkit/runtime). */
+  telemetry: z
+    .object({
+      trajectory: z
+        .object({
+          enabled: z.boolean().default(true),
+          includeContent: z.boolean().default(true),
+        })
+        .default({}),
+    })
+    .default({}),
 });
 
 export type KyberConfig = z.infer<typeof KyberConfigSchema>;

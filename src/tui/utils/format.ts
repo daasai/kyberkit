@@ -27,3 +27,12 @@ export const estimateCost = (
 
 /** Format a cost value as a fixed-precision dollar string. */
 export const formatCost = (usd: number): string => `$${usd.toFixed(4)}`;
+
+/** Format milliseconds as "45s" or "3m 12s". */
+export const formatDurationMs = (ms: number): string => {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m ${r}s`;
+};

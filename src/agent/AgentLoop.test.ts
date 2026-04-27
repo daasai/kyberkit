@@ -13,6 +13,9 @@ import { AgentEvent } from '../types/agent-events.js';
 import { CommandRegistry } from '../commands/CommandRegistry.js';
 import { HelpCommand } from '../commands/builtin/HelpCommand.js';
 import { z } from 'zod';
+import { MemoryTriggerMiddleware, DEFAULT_MEMORY_TRIGGER_CONFIG } from './middleware/MemoryTriggerMiddleware.js';
+import type { SessionMemory } from '../memory/SessionMemory.js';
+import type { SessionMemoryExtractor } from '../memory/extractors/SessionMemoryExtractor.js';
 
 /** Helper: create an async iterable from an array of StreamEvents */
 async function* streamFromEvents(events: StreamEvent[]): AsyncIterable<StreamEvent> {
@@ -385,6 +388,109 @@ describe('AgentLoop (M6.3)', () => {
 
       expect(mockModel.chatStream).toHaveBeenCalledTimes(1);
       expect(events.some(e => e.type === 'turn_complete')).toBe(true);
+      expect(agent.status).toBe('completed');
+    });
+
+    /**
+     * Regression: session extract on `turn_complete` + `tool_use` used to run before tool results
+     * existed and blocked `waitIdle()` until the extractor LLM finished — felt like a hang after
+     * the first tool (e.g. read_file). Extract must not run until a real `end_turn` completion.
+     */
+    it('should not stall between tool_use and the next model stream when MemoryTrigger uses slow extract', async () => {
+      let callCount = 0;
+      const bus = new TypedEventBus<KyberEvents>();
+      const extract = mock(async () => {
+        await new Promise((r) => setTimeout(r, 500));
+        return { markdown: '## Snip\nok', tokenCount: 8 };
+      });
+      const sessionMemory = {
+        hasExtractedNotes: mock(() => false),
+        getExtractedMarkdown: mock(() => null),
+        mergeExtracted: mock(() => {}),
+      } as unknown as SessionMemory;
+      const sessionExtractor = { extract } as unknown as SessionMemoryExtractor;
+
+      const memoryTrigger = new MemoryTriggerMiddleware({
+        sessionExtractor,
+        sessionMemory,
+        eventBus: bus,
+        config: { ...DEFAULT_MEMORY_TRIGGER_CONFIG, sessionTurnThreshold: 1 },
+      });
+
+      const mockTool: ToolDefinition = {
+        name: 'ping',
+        description: async () => 'ping',
+        inputSchema: z.any(),
+        maxResultSizeChars: 100,
+        call: mock(async () => ({ success: true, output: 'pong' })),
+        isConcurrencySafe: () => true,
+        isReadOnly: () => true,
+        isEnabled: () => true,
+        checkPermissions: async () => ({ behavior: 'allow' }),
+      };
+
+      const mockModel: ModelProvider = {
+        name: 'mock',
+        supportedModels: [],
+        capabilities: () => ({} as any),
+        countTokens: async () => 0,
+        chat: async () => ({} as any),
+        chatStream: mock(() => {
+          callCount++;
+          if (callCount === 1) {
+            return streamFromEvents([
+              { type: 'tool_use_start', id: 't1', name: 'ping' },
+              { type: 'tool_use_input', id: 't1', inputFragment: '{}' },
+              { type: 'tool_use_stop', id: 't1' },
+              { type: 'message_stop', stopReason: 'tool_use' },
+              { type: 'usage', usage: { inputTokens: 5, outputTokens: 2 } },
+            ]);
+          }
+          return streamFromEvents([
+            { type: 'text_delta', text: 'after-tool' },
+            { type: 'message_stop', stopReason: 'end_turn' },
+            { type: 'usage', usage: { inputTokens: 10, outputTokens: 4 } },
+          ]);
+        }) as any,
+      };
+
+      const facade: ToolIntegrationFacade = {
+        findTool: mock((name: string) => (name === 'ping' ? mockTool : undefined)),
+        listAll: mock(() => [mockTool as any]),
+      };
+
+      const pipeline = new MiddlewarePipeline()
+        .use(new TokenCounterMiddleware())
+        .use(new ContentAccumulatorMiddleware())
+        .use(memoryTrigger);
+
+      const deps: AgentLoopDeps = {
+        agent,
+        model: mockModel,
+        tools: facade,
+        sandbox,
+        pipeline,
+        reliability,
+        memoryTrigger,
+      };
+
+      let tAfterToolResult: number | null = null;
+      let tFirstTextAfterTool: number | null = null;
+      for await (const event of agentLoop(deps)) {
+        if (event.type === 'tool_result') {
+          tAfterToolResult = performance.now();
+        }
+        if (event.type === 'text_delta' && tAfterToolResult != null && tFirstTextAfterTool == null) {
+          tFirstTextAfterTool = performance.now();
+        }
+      }
+
+      expect(tAfterToolResult).not.toBeNull();
+      expect(tFirstTextAfterTool).not.toBeNull();
+      if (tAfterToolResult !== null && tFirstTextAfterTool !== null) {
+        expect(tFirstTextAfterTool - tAfterToolResult).toBeLessThan(200);
+      }
+      expect(extract.mock.calls.length).toBe(1);
       expect(agent.status).toBe('completed');
     });
   });

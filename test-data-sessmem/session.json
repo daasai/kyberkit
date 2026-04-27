@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "id": "t1",
+      "content": "User likes tea",
+      "category": "user",
+      "timestamp": 1777269935546
+    }
+  ],
+  "metadata": {
+    "tokenCount": 4,
+    "toolCallCount": 0
+  },
+  "extractedNotes": null,
+  "timestamp": 1777269935600
+}

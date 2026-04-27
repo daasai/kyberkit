@@ -1,6 +1,7 @@
 import { AgentStatus, AgentDefinition } from './agent.js';
 import { PermissionTag } from './permission.js';
 import { StopReason } from './model.js';
+import type { MemoryCategory } from './memory.js';
 
 export type KyberEvents = {
   // Agent lifecycle events
@@ -19,6 +20,8 @@ export type KyberEvents = {
   // Permission events
   'permission.denied': { toolName: string; agentId: string; tag: PermissionTag };
   'permission.granted': { toolName: string; agentId: string; tag: PermissionTag };
+  /** A persistent grant was added and written to `permit.yaml` (Track B). */
+  'permit.persistent_recorded': { toolName: string; maxLevel: 'L0' | 'L1' | 'L2' | 'L3' };
 
   // MCP events
   'mcp.connected': { serverName: string };
@@ -28,11 +31,28 @@ export type KyberEvents = {
   // Skill events
   'skill.loaded': { skillName: string; source: string };
   'skill.activated': { skillName: string; trigger: string };
+  /** Track B — draft ready for user review (fires async after task_complete). */
+  'skill.suggested': import('./skill-suggestion.js').SkillSuggestionPayload;
+  /** User saved the draft to `.kyberkit/skills/<slug>/SKILL.md`. */
+  'skill.adopted': { slug: string; path: string; taskId?: string };
+  /** User dismissed the draft without saving. */
+  'skill.discarded': { draftId: string; taskId?: string };
 
   // --- Phase 1: Reliability Layer Events ---
 
   // Memory events
-  'memory.written': { tierId: string; entryId: string };
+  // Sprint 3.5 §6.1 — the "已记住" toast + `/assets` feed read the optional
+  // fields below. They are populated whenever the writer knows them (i.e. by
+  // MarkdownMemoryStore); older publishers that only know entryId remain
+  // wire-compatible.
+  'memory.written': {
+    tierId: string;
+    entryId: string;
+    category?: MemoryCategory;
+    title?: string;
+    path?: string;
+    source?: 'auto' | 'manual';
+  };
   'memory.evicted': { tierId: string; count: number; policy: string };
   // [C1] Session memory flush triggered by token threshold
   'memory.session_flushed': { tokenCount: number; toolCallCount: number };
@@ -84,6 +104,11 @@ export type KyberEvents = {
   'stream.started': { agentId: string; turnNumber: number };
   'stream.completed': { agentId: string; turnNumber: number; stopReason: StopReason };
   'stream.error': { agentId: string; turnNumber: number; error: Error };
+
+  /** User submitted a natural-language turn (before agent loop). */
+  'user.turn_sent': { agentId: string; turnId: string; userTextLen: number };
+  /** User cancelled or interrupted the current turn. */
+  'user.interrupted': { agentId: string; turnId?: string };
 
   // Middleware
   'middleware.registered': { name: string };

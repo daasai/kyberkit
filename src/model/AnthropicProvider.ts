@@ -16,14 +16,17 @@ export class AnthropicProvider implements ModelProvider {
    * Send a complete chat turn request to Anthropic API.
    */
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const response = await this.client.messages.create({
-      model: request.model,
-      max_tokens: request.maxTokens ?? 4096,
-      system: request.systemPrompt,
-      messages: this.mapMessages(request.messages),
-      tools: this.mapTools(request.tools),
-      temperature: request.temperature,
-    });
+    const response = await this.client.messages.create(
+      {
+        model: request.model,
+        max_tokens: request.maxTokens ?? 4096,
+        system: request.systemPrompt,
+        messages: this.mapMessages(request.messages),
+        tools: this.mapTools(request),
+        temperature: request.temperature,
+      },
+      { signal: request.abortSignal },
+    );
 
     return this.mapResponse(response as any);
   }
@@ -36,15 +39,18 @@ export class AnthropicProvider implements ModelProvider {
    * accumulated manually as strings, following the DeepCC pattern.
    */
   async *chatStream(request: ChatRequest): AsyncIterable<StreamEvent> {
-    const stream = await this.client.messages.create({
-      model: request.model,
-      max_tokens: request.maxTokens ?? 4096,
-      system: request.systemPrompt,
-      messages: this.mapMessages(request.messages),
-      tools: this.mapTools(request.tools),
-      temperature: request.temperature,
-      stream: true,
-    });
+    const stream = await this.client.messages.create(
+      {
+        model: request.model,
+        max_tokens: request.maxTokens ?? 4096,
+        system: request.systemPrompt,
+        messages: this.mapMessages(request.messages),
+        tools: this.mapTools(request),
+        temperature: request.temperature,
+        stream: true,
+      },
+      { signal: request.abortSignal },
+    );
 
     // Per-block accumulation state
     // Maps block index → { type, id?, name?, data }
@@ -184,9 +190,18 @@ export class AnthropicProvider implements ModelProvider {
   /**
    * Map KyberKit tool definitions to Anthropic SDK format.
    */
-  private mapTools(tools?: ChatRequest['tools']): Anthropic.Messages.Tool[] | undefined {
+  private mapTools(request: ChatRequest): Anthropic.Messages.Tool[] | undefined {
+    const resolved = request.resolvedTools;
+    if (resolved && resolved.length > 0) {
+      return resolved.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: zodToJsonSchema(t.inputSchema as any) as any,
+      }));
+    }
+    const tools = request.tools;
     if (!tools || tools.length === 0) return undefined;
-    return tools.map(t => ({
+    return tools.map((t) => ({
       name: t.name,
       description: t.description ? '(Dynamic desc enabled)' : '',
       input_schema: zodToJsonSchema(t.inputSchema as any) as any,

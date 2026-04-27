@@ -8,7 +8,7 @@ import { PromptSectionProvider, AssemblyContext } from '../../types/prompt.js';
  */
 export class EnvironmentProvider implements PromptSectionProvider {
   readonly id = 'environment';
-  readonly priority = 4;
+  readonly priority = 5;
   readonly cacheable = false;
   readonly source = 'dynamic' as const;
 

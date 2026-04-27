@@ -17,6 +17,7 @@ function makeContext(messages: ChatMessage[]): MiddlewareContext {
   return {
     agent: { messages } as any,
     turnNumber: 0,
+    latestUserTurnText: '',
     cumulative: {
       totalInputTokens: 0,
       totalOutputTokens: 0,
@@ -248,5 +249,17 @@ describe('MemoryTriggerMiddleware', () => {
     await mw.waitIdle();
 
     expect(ltmExtract.mock.calls).toHaveLength(0);
+  });
+
+  it('does not trigger session extraction on tool_use turn_complete', async () => {
+    const { deps } = makeDeps({
+      config: { sessionTurnThreshold: 1, sessionTokenThreshold: 999_999, sessionToolCallThreshold: 999 },
+    });
+    const mw = new MemoryTriggerMiddleware(deps);
+
+    mw.process({ type: 'turn_complete', turnNumber: 1, stopReason: 'tool_use', content: [] }, ctx);
+    await mw.waitIdle();
+
+    expect((deps.sessionExtractor.extract as any).mock.calls).toHaveLength(0);
   });
 });

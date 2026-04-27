@@ -1,7 +1,10 @@
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, writeFile, appendFile } from 'fs/promises';
+import { readdirSync } from 'fs';
 import { join } from 'path';
 import { ensureWorkspaceSeed, resolveWorkspacePaths } from '../runtime/WorkspaceBootstrap.js';
 import { KyberRuntime } from '../runtime/KyberRuntime.js';
+import { KyberAnalyticsDb } from '../observability/KyberAnalyticsDb.js';
+import { parseSinceToMs } from '../observability/parseSince.js';
 
 const KK_MD_TEMPLATE = `# KK.md
 
@@ -84,6 +87,8 @@ export async function run(argv: string[] = []): Promise<void> {
   switch (cmd) {
     case 'init':
       return runInit(rest);
+    case 'trajectory':
+      return runTrajectoryCli(rest);
     case 'chat':
     case undefined:
       return runChat(rest);
@@ -109,6 +114,7 @@ Usage: kyberkit [command] [options]
 Commands:
   chat           Start the interactive REPL (default)
   init [name]    Scaffold a new KyberKit project
+  trajectory     Export local trajectory DB (JSONL)
 
 Options:
   --help, -h     Show this help
@@ -117,8 +123,54 @@ Options:
 Chat options:
   --workspace <id>      Workspace ID (default: "default")
   --no-tui              Fallback to plain readline mode
+  --verbose             (no-tui) Full event stream: [phase], tools, token lines
+  --log-file <path>     (no-tui) Append [phase] lines to a debug log file
   --reliability <mode>  real | inmemory (default: real)
+
+Trajectory export:
+  kyberkit trajectory export [--since 7d]
 `);
+}
+
+function formatDurMs(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
+async function runTrajectoryCli(args: string[]): Promise<void> {
+  const sub = args[0];
+  if (sub !== 'export') {
+    console.error('Usage: kyberkit trajectory export [--since 7d]');
+    process.exit(1);
+  }
+  const rest = args.slice(1);
+  const sinceIdx = rest.indexOf('--since');
+  const sinceRaw = sinceIdx >= 0 ? rest[sinceIdx + 1] ?? '7d' : '7d';
+  const sinceMs = parseSinceToMs(sinceRaw);
+  const root = join(process.cwd(), '.kyberkit', 'runtime');
+  let files: string[];
+  try {
+    files = readdirSync(root).filter((f) => f.endsWith('.trajectory.sqlite'));
+  } catch {
+    console.error(`No runtime directory at ${root}`);
+    process.exit(1);
+  }
+  if (files.length === 0) {
+    console.error('No *.trajectory.sqlite files found.');
+    process.exit(1);
+  }
+  for (const f of files) {
+    const db = new KyberAnalyticsDb(join(root, f));
+    try {
+      for (const { line } of db.exportEventsJsonlSince(sinceMs)) {
+        process.stdout.write(`${line}\n`);
+      }
+    } finally {
+      db.close();
+    }
+  }
 }
 
 async function runInit(args: string[]): Promise<void> {
@@ -132,6 +184,9 @@ async function runInit(args: string[]): Promise<void> {
 
 async function runChat(args: string[]): Promise<void> {
   const noTui = args.includes('--no-tui');
+  const verbose = args.includes('--verbose');
+  const logIdx = args.indexOf('--log-file');
+  const logFile = logIdx !== -1 ? args[logIdx + 1] : undefined;
   const reliabilityIdx = args.indexOf('--reliability');
   const reliabilityMode = reliabilityIdx !== -1 ? args[reliabilityIdx + 1] : undefined;
 
@@ -143,7 +198,7 @@ async function runChat(args: string[]): Promise<void> {
 
   // Non-TTY or --no-tui → plain readline fallback
   if (noTui || !process.stdin.isTTY) {
-    return runReadlineFallback(reliabilityMode);
+    return runReadlineFallback(reliabilityMode, { verbose, logFile });
   }
 
   const runtime = new KyberRuntime();
@@ -169,7 +224,10 @@ async function runChat(args: string[]): Promise<void> {
   await session.close();
 }
 
-async function runReadlineFallback(reliabilityMode?: string): Promise<void> {
+async function runReadlineFallback(
+  reliabilityMode?: string,
+  opts: { verbose?: boolean; logFile?: string } = {},
+): Promise<void> {
   const { createInterface } = await import('readline');
   const runtime = new KyberRuntime();
   await runtime.bootstrap();
@@ -178,12 +236,19 @@ async function runReadlineFallback(reliabilityMode?: string): Promise<void> {
     reliability: (reliabilityMode ?? process.env.KYBER_RELIABILITY ?? 'real') as 'real' | 'inmemory',
   });
 
+  const verbose = opts.verbose === true;
   console.log('KyberKit REPL (no-tui mode)');
   console.log(`Model: ${runtime.getConfig().model.name}`);
+  console.log(verbose ? 'Verbose: on ([phase] / full tool output).' : 'Compact progress lines (use --verbose for debug).');
   console.log('Type a message, /quit to exit.\n');
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const prompt = () => rl.question('\n> ', handleInput);
+
+  const logPhase = async (line: string) => {
+    if (!opts.logFile) return;
+    await appendFile(opts.logFile, line, 'utf-8').catch(() => {});
+  };
 
   const handleInput = async (input: string) => {
     const trimmed = input.trim();
@@ -192,17 +257,87 @@ async function runReadlineFallback(reliabilityMode?: string): Promise<void> {
       rl.close();
       process.exit(0);
     }
-    if (!trimmed) { prompt(); return; }
+    if (!trimmed) {
+      prompt();
+      return;
+    }
+
+    let lastEv = Date.now();
+    const turnStart = Date.now();
+    let toolCalls = 0;
+    const heart =
+      verbose
+        ? null
+        : setInterval(() => {
+            const idle = Date.now() - lastEv;
+            if (idle < 3000) return;
+            const line = `  … 运行中 ${formatDurMs(Date.now() - turnStart)} · ${toolCalls} 工具\n`;
+            process.stdout.write(line);
+          }, 3000);
 
     try {
+      if (!verbose) {
+        const title = trimmed.replace(/\s+/g, ' ').slice(0, 72);
+        process.stdout.write(`\n› ${title}\n`);
+      }
+
       for await (const event of session.send(trimmed)) {
+        lastEv = Date.now();
+
+        if (verbose) {
+          if (event.type === 'text_delta') process.stdout.write(event.text);
+          if (event.type === 'thinking_delta') process.stdout.write(event.text);
+          if (event.type === 'tool_use_start') process.stdout.write(`\n[tool] ${event.toolName}…\n`);
+          if (event.type === 'tool_result') {
+            const head = event.result.length > 400 ? `${event.result.slice(0, 400)}…` : event.result;
+            process.stdout.write(
+              `\n[tool result] ${event.toolName}${event.isError ? ' (error)' : ''}\n${head}\n`,
+            );
+          }
+          if (event.type === 'turn_phase') {
+            const line = `\n[phase] ${event.phase}\n`;
+            process.stdout.write(line);
+            void logPhase(line);
+          }
+          if (event.type === 'usage') {
+            process.stdout.write(`\n[${event.usage.inputTokens}in/${event.usage.outputTokens}out]\n`);
+          }
+          continue;
+        }
+
+        // Compact mode
+        if (event.type === 'thinking_delta') continue;
         if (event.type === 'text_delta') process.stdout.write(event.text);
-        if (event.type === 'tool_use_start') process.stdout.write(`\n[tool] ${event.toolName}…\n`);
-        if (event.type === 'usage') process.stdout.write(`\n[${event.usage.inputTokens}in/${event.usage.outputTokens}out]\n`);
+        if (event.type === 'task_plan') {
+          process.stdout.write(`  计划 (${event.source}): ${event.steps.map((s) => s.title).join(' → ')}\n`);
+        }
+        if (event.type === 'task_narration') {
+          process.stdout.write(`  · ${event.text}\n`);
+        }
+        if (event.type === 'tool_use_start') {
+          toolCalls++;
+          process.stdout.write(`  … ${event.toolName}\n`);
+        }
+        if (event.type === 'tool_result') {
+          const sym = event.isError ? '✗' : '✓';
+          const head = event.result.split('\n')[0] ?? '';
+          const tail = head.length > 100 ? `${head.slice(0, 99)}…` : head;
+          process.stdout.write(`  ${sym} ${event.toolName}${event.isError ? ' (error)' : ''} ${tail}\n`);
+        }
+        if (event.type === 'turn_phase') {
+          const line = `[phase] ${event.phase}\n`;
+          void logPhase(line);
+        }
+        if (event.type === 'usage') {
+          process.stdout.write(
+            `\n  [${event.usage.inputTokens}in/${event.usage.outputTokens}out · cum ${event.cumulative.totalInputTokens}in]\n`,
+          );
+        }
       }
     } catch (err) {
       console.error('[error]', err);
     } finally {
+      if (heart) clearInterval(heart);
       prompt();
     }
   };

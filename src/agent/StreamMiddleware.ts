@@ -10,6 +10,8 @@ export interface MiddlewareContext {
   readonly agent: DefaultAgentInstance;
   /** Current turn number */
   turnNumber: number;
+  /** Latest natural-language user text for this turn (set by AgentLoop). */
+  latestUserTurnText: string;
   /** Cumulative session usage */
   cumulative: CumulativeUsage;
   /** Accumulated content blocks for current assistant turn */
@@ -97,6 +99,7 @@ export function createMiddlewareContext(agent: DefaultAgentInstance): Middleware
   return {
     agent,
     turnNumber: 0,
+    latestUserTurnText: '',
     cumulative: {
       totalInputTokens: 0,
       totalOutputTokens: 0,

@@ -1,32 +1,83 @@
-import React, { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useEffect, type FC } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 
+const COMPLETION_VISIBLE = 10;
+
+export interface CommandEntry {
+  readonly name: string;
+  readonly description: string;
+}
+
 interface Props {
   disabled: boolean;
+  /** When true, main line is disabled because a tool-permission gate is open (Y/N handled above). */
+  awaitingToolPermission?: boolean;
   onSubmit: (text: string) => void;
   onCancel?: () => void;
   history: string[];
-  commandSuggestions: string[];
+  commandEntries: readonly CommandEntry[];
+  /** Empty-line `v` toggles compact/verbose tool rows (handled here so typing "have" still works). */
+  onToggleDisplayMode?: () => void;
 }
 
-export const PromptInput: React.FC<Props> = ({
+export const PromptInput: FC<Props> = ({
   disabled,
+  awaitingToolPermission,
   onSubmit,
   onCancel,
   history,
-  commandSuggestions,
+  commandEntries,
+  onToggleDisplayMode,
 }) => {
   const [value, setValue] = useState('');
   const [historyIdx, setHistoryIdx] = useState(history.length);
+  const [highlightIdx, setHighlightIdx] = useState(0);
 
-  // Sync historyIdx ceiling when history grows
   const effectiveHistory = history;
+
+  const raw = value.trimStart();
+  const isCommand = raw.startsWith('/');
+  const prefix = isCommand ? raw.slice(1) : '';
+
+  const filtered = useMemo(
+    () => commandEntries.filter(e => e.name.startsWith(prefix)),
+    [commandEntries, prefix],
+  );
+
+  useEffect(() => {
+    setHighlightIdx(0);
+  }, [value]);
 
   useInput((input, key) => {
     if (disabled) return;
 
-    // Ctrl+C: clear input first, then cancel if already empty
+    const rawNow = value.trimStart();
+    const cmdNow = rawNow.startsWith('/');
+    const prefNow = cmdNow ? rawNow.slice(1) : '';
+    const filtNow = commandEntries.filter(e => e.name.startsWith(prefNow));
+
+    if (
+      onToggleDisplayMode &&
+      (input === 'v' || input === 'V') &&
+      value.length === 0 &&
+      !key.ctrl &&
+      !key.meta
+    ) {
+      onToggleDisplayMode();
+      return;
+    }
+
+    if (cmdNow && filtNow.length > 0 && (key.upArrow || key.downArrow)) {
+      if (key.upArrow) {
+        setHighlightIdx(h => Math.max(0, h - 1));
+      }
+      if (key.downArrow) {
+        setHighlightIdx(h => Math.min(filtNow.length - 1, h + 1));
+      }
+      return;
+    }
+
     if (key.ctrl && input === 'c') {
       if (value.length > 0) {
         setValue('');
@@ -36,13 +87,11 @@ export const PromptInput: React.FC<Props> = ({
       return;
     }
 
-    // Esc: clear input
     if (key.escape) {
       setValue('');
       return;
     }
 
-    // ↑ history navigation
     if (key.upArrow && effectiveHistory.length > 0) {
       const next = Math.max(0, historyIdx - 1);
       setHistoryIdx(next);
@@ -50,7 +99,6 @@ export const PromptInput: React.FC<Props> = ({
       return;
     }
 
-    // ↓ history navigation
     if (key.downArrow) {
       const next = Math.min(effectiveHistory.length, historyIdx + 1);
       setHistoryIdx(next);
@@ -70,31 +118,61 @@ export const PromptInput: React.FC<Props> = ({
     [disabled, onSubmit, history.length],
   );
 
-  // Show command completions when input starts with "/"
-  const isCommand = value.startsWith('/');
-  const candidates = isCommand
-    ? commandSuggestions.filter(c => c.startsWith(value.slice(1))).slice(0, 5)
-    : [];
+  const safeHighlight = Math.min(
+    highlightIdx,
+    Math.max(0, filtered.length - 1),
+  );
+  const windowStart =
+    filtered.length <= COMPLETION_VISIBLE
+      ? 0
+      : Math.min(
+          Math.max(0, safeHighlight - Math.floor(COMPLETION_VISIBLE / 2)),
+          Math.max(0, filtered.length - COMPLETION_VISIBLE),
+        );
+  const visible = filtered.slice(windowStart, windowStart + COMPLETION_VISIBLE);
 
   return (
     <Box flexDirection="column">
       <Box>
         <Text color={disabled ? 'gray' : 'cyan'}>{'▶ '}</Text>
         <TextInput
+          focus={!disabled}
           value={value}
           onChange={setValue}
           onSubmit={handleSubmit}
           placeholder={
-            disabled ? '(agent is thinking…)' : 'Type a message, or / for commands'
+            disabled
+              ? awaitingToolPermission
+                ? '(use Y / N / Esc in Tool permission above — prompt paused)'
+                : '(agent is thinking…)'
+              : 'Type a message, or / for commands'
           }
         />
       </Box>
 
-      {candidates.length > 0 && (
-        <Box marginLeft={2}>
-          <Text dimColor>{'  '}{candidates.map(c => `/${c}`).join('  ')}</Text>
+      {isCommand && filtered.length > 0 ? (
+        <Box flexDirection="column" marginLeft={2} marginTop={0}>
+          <Text dimColor>
+            {`  ↑↓ 浏览 · ${filtered.length} 个命令`}
+            {filtered.length > COMPLETION_VISIBLE
+              ? ` · 窗口 ${windowStart + 1}-${windowStart + visible.length}`
+              : ''}
+          </Text>
+          {visible.map((e, i) => {
+            const row = windowStart + i;
+            const active = row === safeHighlight;
+            return (
+              <Box key={`${e.name}-${row}`}>
+                <Text color={active ? 'cyan' : undefined} bold={active}>
+                  {'  '}
+                  {`/${e.name}`}
+                  <Text dimColor>{`  ${e.description}`}</Text>
+                </Text>
+              </Box>
+            );
+          })}
         </Box>
-      )}
+      ) : null}
     </Box>
   );
 };

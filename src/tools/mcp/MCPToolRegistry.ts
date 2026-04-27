@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { ToolDefinition, ToolResult, ToolUseContext } from '../../types/tool.js';
+import { ToolContext, ToolDefinition, ToolResult, ToolUseContext } from '../../types/tool.js';
 import { MCPServerConfig } from '../../types/config.js';
 import { z } from 'zod';
 
@@ -84,7 +84,8 @@ export class DefaultMCPToolRegistry {
 
     return {
       name: toolName,
-      description: async () => mcpTool.description ?? `Tool from ${serverName}: ${toolName}`,
+      description: async (_input: unknown, _ctx: ToolContext) =>
+        mcpTool.description ?? `Tool from ${serverName}: ${toolName}`,
       inputSchema,
       maxResultSizeChars: 100_000,
       
@@ -109,7 +110,7 @@ export class DefaultMCPToolRegistry {
       },
 
       isConcurrencySafe: () => true,
-      isReadOnly: () => false, // Default is unknown, usually MCP tools are assumed read-write
+      isReadOnly: () => false,
       isEnabled: () => true,
       checkPermissions: async () => ({ behavior: 'allow' }),
     };

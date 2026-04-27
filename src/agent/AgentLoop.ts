@@ -1,9 +1,9 @@
 import { DefaultAgentInstance } from './AgentInstance.js';
 import { isTerminal } from './AgentStateMachine.js';
-import { ModelProvider, MessageContent, StreamEvent, StopReason } from '../types/model.js';
-import { ToolIntegrationFacade, ToolDefinition } from '../types/tool.js';
+import { ModelProvider, MessageContent, StopReason } from '../types/model.js';
+import { ToolIntegrationFacade } from '../types/tool.js';
 import { PermissionSandbox } from '../permission/PermissionSandbox.js';
-import { ToolValidationError, PermissionDeniedError, ToolExecutionError, ModelError } from '../types/errors.js';
+import { ModelError } from '../types/errors.js';
 import { MemoryStore } from '../memory/MemoryStore.js';
 import { CheckpointManager } from '../checkpoint/CheckpointManager.js';
 import { ExceptionHandler } from '../exception/ExceptionHandler.js';
@@ -14,6 +14,15 @@ import { TokenCounterMiddleware } from './middleware/TokenCounterMiddleware.js';
 import { ContentAccumulatorMiddleware } from './middleware/ContentAccumulatorMiddleware.js';
 import { ToolDispatcherMiddleware } from './middleware/ToolDispatcherMiddleware.js';
 import { StreamEventMapper } from './StreamEventMapper.js';
+import { resolveToolsForApi } from './resolveToolsForApi.js';
+import { extractLatestNaturalUserText } from './userTurnText.js';
+import { discoverActiveSkills } from '../prompt/SkillDiscoveryService.js';
+import type { ToolRuleChecker } from '../tools/ToolRuleChecker.js';
+import type { CanAuthorizeBatchFn, CanUseToolFn } from '../permission/ToolPermissionGate.js';
+import { autoAllowCanUseTool } from '../permission/ToolPermissionGate.js';
+import type { PermitStore } from '../permission/PermitStore.js';
+import type { TypedEventBus } from '../events/EventBus.js';
+import type { KyberEvents } from '../types/events.js';
 
 export interface ReliabilityLayer {
   memory: MemoryStore;
@@ -37,6 +46,27 @@ export interface AgentLoopDeps {
   workspace?: import('../runtime/WorkspaceInstance.js').WorkspaceInstance;
   // Sprint 4: Turn-begin context compaction guard
   compactionGuard?: import('./middleware/CompactionGuardMiddleware.js').CompactionGuardMiddleware;
+  /** When set, agentLoop awaits this before reading L2 memory so async extraction has merged. */
+  memoryTrigger?: import('./middleware/MemoryTriggerMiddleware.js').MemoryTriggerMiddleware;
+  /** Single-turn model stream timeout (ms). */
+  turnTimeoutMs?: number;
+  /** Deny rules evaluated before tool execution. */
+  toolRuleChecker?: ToolRuleChecker;
+  /**
+   * Mutable bag: runtime sets `canUseTool` for TUI prompts without recreating the session.
+   * When absent, {@link autoAllowCanUseTool} is used. Sprint 3.5 adds `canAuthorizeBatch`
+   * for the pre-dispatch batch authorization card.
+   */
+  toolPermission?: {
+    canUseTool?: CanUseToolFn;
+    canAuthorizeBatch?: CanAuthorizeBatchFn;
+  };
+
+  /** Sprint 3.5 §4.2 — shared task/session grant store (optional; enables batch + skip flow). */
+  permitStore?: PermitStore;
+
+  /** When set, tool dispatch emits `tool.call_start` / `tool.call_end` on this bus. */
+  eventBus?: TypedEventBus<KyberEvents>;
 }
 
 
@@ -57,7 +87,26 @@ export async function* agentLoop(
   deps: AgentLoopDeps,
 ): AsyncGenerator<AgentEvent, void, void> {
   const { agent, model, tools, sandbox, pipeline, reliability } = deps;
-  const toolDispatcher = new ToolDispatcherMiddleware(tools, sandbox);
+  const canUseTool = deps.toolPermission?.canUseTool ?? autoAllowCanUseTool;
+  const canAuthorizeBatch = deps.toolPermission?.canAuthorizeBatch;
+  const permitStore = deps.permitStore;
+  const toolObs =
+    deps.eventBus != null
+      ? { bus: deps.eventBus, getAgentId: () => agent.id }
+      : undefined;
+  const toolDispatcher = new ToolDispatcherMiddleware(tools, sandbox, {
+    ruleChecker: deps.toolRuleChecker,
+    canUseTool,
+    canAuthorizeBatch,
+    permitStore,
+    observability: toolObs,
+  });
+
+  const observeTaskLifecycle = (ev: AgentEvent): void => {
+    if (!permitStore) return;
+    if (ev.type === 'task_plan' && ev.taskId) permitStore.setCurrentTask(ev.taskId);
+    if (ev.type === 'task_complete') permitStore.onTaskComplete(ev.taskId);
+  };
   const context = createMiddlewareContext(agent);
   const mapper = new StreamEventMapper();
 
@@ -88,8 +137,29 @@ export async function* agentLoop(
       }
     }
 
+    // 1.75: prior turn's L2 extraction runs async on turn_complete; wait so getContext() sees merged notes.
+    await deps.memoryTrigger?.waitIdle();
+
+    context.latestUserTurnText = extractLatestNaturalUserText(agent.messages as any) ?? '';
+
     // 2. Sense: memory context
     const memoryContext = reliability.memory.getContext();
+
+    const modelTools = tools.listAll();
+    const resolvedTools = await resolveToolsForApi(modelTools, agent.context);
+    const toolRowsForPrompt = resolvedTools.map((r) => ({
+      name: r.name,
+      description: r.description,
+      inputSchema: r.inputSchema,
+    }));
+
+    const userTurnText = extractLatestNaturalUserText(agent.messages as any);
+    const skillMetas = tools.listSkillMetas?.() ?? [];
+    const active = discoverActiveSkills(skillMetas, {
+      userText: userTurnText,
+      cwd: process.cwd(),
+    });
+    const skillContext = active.map((m) => `## ${m.name}\n${m.body}`).join('\n\n');
 
     // 3. Assemble System Prompt
     let systemPrompt: string;
@@ -97,15 +167,13 @@ export async function* agentLoop(
       const assembled = await deps.promptAssembler.assemble({
         budget: 30000,
         cwd: process.cwd(),
-        tools: tools.listAll().map(t => ({ 
-          name: t.name, 
-          description: t.description || '', 
-          inputSchema: t.inputSchema 
-        })),
+        tools: toolRowsForPrompt,
         memoryContext,
         assets: deps.workspace?.assets?.getManifest?.() || undefined,
         workspaceConfig: deps.workspace?.config,
-        reliability
+        reliability,
+        userTurnText,
+        skillContext,
       });
       systemPrompt = assembled.text;
     } else {
@@ -116,31 +184,53 @@ export async function* agentLoop(
       // 4. Think: Stream LLM response
       let currentStopReason: StopReason = 'end_turn';
 
+      const turnMs = deps.turnTimeoutMs ?? 120_000;
+      const abortController = new AbortController();
+      const turnTimer =
+        turnMs > 0 ? setTimeout(() => abortController.abort(), turnMs) : undefined;
+
+      yield { type: 'turn_phase', phase: 'model_stream' };
+
       const stream = model.chatStream({
         model: agent.definition.model,
         systemPrompt,
         messages: agent.messages as any,
-        tools: tools.listAll(),
+        tools: modelTools,
+        resolvedTools,
+        abortSignal: abortController.signal,
       });
 
+      try {
+        for await (const streamEvent of stream) {
+          // Capture stop reason from message_stop
+          if (streamEvent.type === 'message_stop') {
+            currentStopReason = streamEvent.stopReason;
+            context.stopReason = currentStopReason;
+            continue;
+          }
 
-      for await (const streamEvent of stream) {
-        // Capture stop reason from message_stop
-        if (streamEvent.type === 'message_stop') {
-          currentStopReason = streamEvent.stopReason;
-          context.stopReason = currentStopReason;
-          continue;
+          // D3 fix: Use StreamEventMapper for unified mapping + enrichment
+          const agentEvent = mapper.mapEvent(streamEvent);
+          if (!agentEvent) continue;
+
+          // Process through middleware pipeline
+          const processedEvents = pipeline.process(agentEvent, context);
+          for (const pe of processedEvents) {
+            observeTaskLifecycle(pe);
+            yield pe;
+          }
         }
-
-        // D3 fix: Use StreamEventMapper for unified mapping + enrichment
-        const agentEvent = mapper.mapEvent(streamEvent);
-        if (!agentEvent) continue;
-
-        // Process through middleware pipeline
-        const processedEvents = pipeline.process(agentEvent, context);
-        for (const pe of processedEvents) {
-          yield pe;
+      } catch (streamErr: any) {
+        if (streamErr?.name === 'AbortError' && turnMs > 0) {
+          yield {
+            type: 'status',
+            status: 'turn_timeout',
+            message: `Turn timed out after ${turnMs} ms`,
+          };
         }
+        throw streamErr;
+      } finally {
+        if (turnTimer) clearTimeout(turnTimer);
       }
 
       // Record success
@@ -164,19 +254,29 @@ export async function* agentLoop(
       if (currentStopReason === 'tool_use' && context.pendingToolUses.length > 0) {
         reliability.memory.recordToolCall();
 
+        yield { type: 'turn_phase', phase: 'tool_execution' };
+
         const toolResults: MessageContent[] = [];
-        for await (const result of toolDispatcher.dispatchTools(
+        for await (const rawEv of toolDispatcher.dispatchTools(
           context.pendingToolUses,
           agent.context,
         )) {
-          yield result;
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: result.toolUseId,
-            content: result.result,
-            is_error: result.isError,
-          });
+          const processed = pipeline.process(rawEv, context);
+          for (const ev of processed) {
+            observeTaskLifecycle(ev);
+            yield ev;
+            if (ev.type === 'tool_result') {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: ev.toolUseId,
+                content: ev.result,
+                is_error: ev.isError,
+              });
+            }
+          }
         }
+
+        yield { type: 'turn_phase', phase: 'idle' };
 
         if (toolResults.length > 0) {
           agent.addMessage('user', toolResults);
@@ -199,8 +299,11 @@ export async function* agentLoop(
         }
       }
 
-      // Yield final turn_complete to consumer
+      // Yield final turn_complete to consumer (NarratorMiddleware may synthesize
+      // a trailing task_complete here — permit store must observe it before the
+      // consumer sees turn_complete so any scoped grants are cleared).
       for (const pe of tcProcessed) {
+        observeTaskLifecycle(pe);
         yield pe;
       }
 
@@ -212,9 +315,15 @@ export async function* agentLoop(
         reliability.exceptionHandler.recordFailure('model');
       }
 
+      const turnMs = deps.turnTimeoutMs ?? 120_000;
+      const errOut =
+        error?.name === 'AbortError' && turnMs > 0
+          ? new Error(`Turn timed out after ${turnMs} ms`)
+          : error;
+
       yield {
         type: 'error',
-        error,
+        error: errOut,
         recoverable: !(error instanceof ModelError),
       };
 

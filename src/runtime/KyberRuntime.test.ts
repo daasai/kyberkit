@@ -98,7 +98,7 @@ describe('KyberRuntime (M8)', () => {
     await runtime.bootstrap();
 
     const pipeline = runtime.createMiddlewarePipeline();
-    expect(pipeline.size).toBe(2); // TokenCounter + ContentAccumulator
+    expect(pipeline.size).toBe(3); // TokenCounter + ContentAccumulator + Narrator
   });
 
   it('should create agent loop deps with workspace components', async () => {
@@ -112,7 +112,7 @@ describe('KyberRuntime (M8)', () => {
     expect(deps.model).toBe(runtime.getModel());
     expect(deps.tools).toBe(runtime.getTools());
     expect(deps.sandbox).toBe(runtime.getSandbox());
-    expect(deps.pipeline.size).toBe(2);
+    expect(deps.pipeline.size).toBe(3);
     
     // Sprint 2 verification
     expect(deps.promptAssembler).toBeDefined();

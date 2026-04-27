@@ -11,12 +11,18 @@ import { ToolSchemaProvider } from '../prompt/providers/ToolSchemaProvider.js';
 import { UserDirectiveProvider } from '../prompt/providers/UserDirectiveProvider.js';
 import { MemoryProvider } from '../prompt/providers/MemoryProvider.js';
 import { EnvironmentProvider } from '../prompt/providers/EnvironmentProvider.js';
+import { ActiveSkillsProvider } from '../prompt/providers/ActiveSkillsProvider.js';
+import { PlanningHintProvider } from '../prompt/providers/PlanningHintProvider.js';
 
 // Builtin Commands
 import { HelpCommand } from '../commands/builtin/HelpCommand.js';
 import { CostCommand } from '../commands/builtin/CostCommand.js';
 import { MemoryCommand } from '../commands/builtin/MemoryCommand.js';
 import { CompactCommand } from '../commands/builtin/CompactCommand.js';
+import { StatsCommand } from '../commands/builtin/StatsCommand.js';
+import { PermitCommand } from '../commands/builtin/PermitCommand.js';
+import { AssetsCommand } from '../commands/builtin/AssetsCommand.js';
+import type { PermitStore } from '../permission/PermitStore.js';
 
 /**
  * WorkspaceInstance — a complete runtime instance for a specific workspace.
@@ -37,6 +43,9 @@ export class WorkspaceInstance {
    */
   private longTermSupplier: () => LongTermMemory | undefined = () => undefined;
 
+  /** Lazy accessor for the shared PermitStore (installed by KyberRuntime). */
+  private permitStoreSupplier: () => PermitStore | undefined = () => undefined;
+
   constructor(
     readonly config: WorkspaceConfig
   ) {
@@ -47,8 +56,10 @@ export class WorkspaceInstance {
     this.promptAssembler = new PromptAssembler()
       .register(new IdentityProvider(config.identityPrompt || 'Professional AI Assistant'))
       .register(new ToolSchemaProvider())
+      .register(new ActiveSkillsProvider())
       .register(new UserDirectiveProvider(() => this.assets.getMergedKKMd()))
-      .register(new MemoryProvider())
+      .register(new PlanningHintProvider())
+      .register(new MemoryProvider(() => this.getLongTermMemory()))
       .register(new EnvironmentProvider());
 
 
@@ -62,7 +73,17 @@ export class WorkspaceInstance {
           () => this.longTermSupplier(),
         ),
       )
-      .register(new CompactCommand());
+      .register(new CompactCommand())
+      .register(new StatsCommand())
+      .register(new PermitCommand(() => this.permitStoreSupplier()))
+      .register(
+        new AssetsCommand(() => this.assets.getManifest()?.entries ?? []),
+      );
+  }
+
+  /** Install a lazy accessor for the shared PermitStore. */
+  attachPermitStore(getter: () => PermitStore | undefined): void {
+    this.permitStoreSupplier = getter;
   }
 
   /**
@@ -71,6 +92,11 @@ export class WorkspaceInstance {
    */
   attachLongTermMemory(getter: () => LongTermMemory | undefined): void {
     this.longTermSupplier = getter;
+  }
+
+  /** Public accessor — used by `/assets`, MemoryToast Ctrl+Z revert, etc. */
+  getLongTermMemory(): LongTermMemory | undefined {
+    return this.longTermSupplier();
   }
 
   /** Bootstrap the workspace by scanning assets. */

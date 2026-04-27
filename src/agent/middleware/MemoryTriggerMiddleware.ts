@@ -33,7 +33,7 @@ export interface MemoryTriggerConfig {
 export const DEFAULT_MEMORY_TRIGGER_CONFIG: MemoryTriggerConfig = {
   sessionTokenThreshold: 4000,
   sessionToolCallThreshold: 8,
-  sessionTurnThreshold: 5,
+  sessionTurnThreshold: 1,
   ltmTurnCooldown: 3,
   enabled: true,
 };
@@ -84,6 +84,12 @@ export class MemoryTriggerMiddleware implements StreamMiddleware {
         this.toolCallsSinceLastExtract++;
         break;
       case 'turn_complete':
+        // Assistant turn is not finished — tool results are not in history yet.
+        // Skipping avoids (1) wrong snapshots and (2) blocking the next agentLoop
+        // iteration on waitIdle() while the model is still mid-tool round-trip.
+        if (event.stopReason === 'tool_use') {
+          break;
+        }
         this.turnsSinceLastSessionExtract++;
         this.turnsSinceLastLtmExtract++;
         this.maybeTriggerSession(ctx);

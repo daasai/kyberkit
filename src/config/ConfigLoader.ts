@@ -30,6 +30,16 @@ import { ConfigError } from '../types/errors.js';
  *   Skills:
  *     KYBER_SKILL_PATHS          - Comma-separated skill directory paths
  *
+ *   Memory (L2 session distill / L3 triggers):
+ *     KYBER_MEMORY_ENABLED                    - 'false' to disable memory middleware
+ *     KYBER_MEMORY_SESSION_TURN_THRESHOLD     - Turns before session note extraction (default: 1)
+ *     KYBER_MEMORY_SESSION_TOKEN_THRESHOLD    - Token accumulation trigger (default: 4000)
+ *     KYBER_MEMORY_SESSION_TOOL_CALL_THRESHOLD- Tool-call count trigger (default: 8)
+ *
+ *   Telemetry (local SQLite trajectory):
+ *     KYBER_TELEMETRY_TRAJECTORY_ENABLED       - 'false' to disable (default: on)
+ *     KYBER_TELEMETRY_TRAJECTORY_INCLUDE_CONTENT - 'false' to store hashes only
+ *
  *   MCP Servers:
  *     KYBER_MCP_SERVER_N_NAME      - Server name (N = 1, 2, ...)
  *     KYBER_MCP_SERVER_N_TRANSPORT - Transport type (stdio/sse/streamable-http)
@@ -57,6 +67,24 @@ function buildConfigFromEnv(): Record<string, unknown> {
 
   const parseNum = (val?: string): number | undefined =>
     val ? parseInt(val, 10) : undefined;
+
+  const parseToolDeny = (): Array<{ tool: string; pattern: string }> | undefined => {
+    const raw = process.env.KYBER_TOOLS_DENY;
+    if (!raw?.trim()) return undefined;
+    try {
+      const v = JSON.parse(raw) as unknown;
+      if (!Array.isArray(v)) return undefined;
+      return v.filter(
+        (x): x is { tool: string; pattern: string } =>
+          typeof x === 'object' &&
+          x !== null &&
+          typeof (x as any).tool === 'string' &&
+          typeof (x as any).pattern === 'string',
+      );
+    } catch {
+      return undefined;
+    }
+  };
 
   return {
     model: {
@@ -102,10 +130,26 @@ function buildConfigFromEnv(): Record<string, unknown> {
     skills: {
       paths: parseList(process.env.KYBER_SKILL_PATHS),
     },
+    tools: {
+      deny: parseToolDeny(),
+    },
     agent: {
       name: process.env.KYBER_AGENT_NAME,
       systemPrompt: process.env.KYBER_AGENT_SYSTEM_PROMPT,
       systemPromptFile: process.env.KYBER_AGENT_SYSTEM_PROMPT_FILE,
+      turnTimeoutMs: parseNum(process.env.KYBER_AGENT_TURN_TIMEOUT_MS),
+    },
+    telemetry: {
+      trajectory: {
+        enabled:
+          process.env.KYBER_TELEMETRY_TRAJECTORY_ENABLED === undefined
+            ? undefined
+            : process.env.KYBER_TELEMETRY_TRAJECTORY_ENABLED !== 'false',
+        includeContent:
+          process.env.KYBER_TELEMETRY_TRAJECTORY_INCLUDE_CONTENT === undefined
+            ? undefined
+            : process.env.KYBER_TELEMETRY_TRAJECTORY_INCLUDE_CONTENT !== 'false',
+      },
     },
   };
 }
