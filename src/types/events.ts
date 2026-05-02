@@ -1,7 +1,8 @@
-import { AgentStatus, AgentDefinition } from './agent.js';
-import { PermissionTag } from './permission.js';
-import { StopReason } from './model.js';
+import type { AgentStatus, AgentDefinition } from './agent.js';
+import type { PermissionTag } from './permission.js';
+import type { StopReason } from './model.js';
 import type { MemoryCategory } from './memory.js';
+import type { ToolPermissionAudit } from './agent-events.js';
 
 export type KyberEvents = {
   // Agent lifecycle events
@@ -13,8 +14,19 @@ export type KyberEvents = {
   // Tool events
   'tool.registered': { toolName: string; layer: 'shell' | 'mcp' | 'skill' };
   'tool.unregistered': { toolName: string };
-  'tool.call_start': { toolName: string; agentId: string; input: unknown };
-  'tool.call_end': { toolName: string; agentId: string; duration: number; success: boolean };
+  'tool.call_start': {
+    toolName: string;
+    agentId: string;
+    input: unknown;
+    audit?: ToolPermissionAudit;
+  };
+  'tool.call_end': {
+    toolName: string;
+    agentId: string;
+    duration: number;
+    success: boolean;
+    audit?: ToolPermissionAudit;
+  };
   'tool.error': { toolName: string; agentId: string; error: Error };
 
   // Permission events

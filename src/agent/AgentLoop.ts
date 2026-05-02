@@ -1,15 +1,15 @@
 import { DefaultAgentInstance } from './AgentInstance.js';
 import { isTerminal } from './AgentStateMachine.js';
-import { ModelProvider, MessageContent, StopReason } from '../types/model.js';
-import { ToolIntegrationFacade } from '../types/tool.js';
-import { PermissionSandbox } from '../permission/PermissionSandbox.js';
+import type { ModelProvider, MessageContent, StopReason } from '../types/model.js';
+import type { ToolIntegrationFacade } from '../types/tool.js';
+import type { PermissionSandbox } from '../permission/PermissionSandbox.js';
 import { ModelError } from '../types/errors.js';
-import { MemoryStore } from '../memory/MemoryStore.js';
-import { CheckpointManager } from '../checkpoint/CheckpointManager.js';
-import { ExceptionHandler } from '../exception/ExceptionHandler.js';
-import { VerificationPipeline } from '../validation/VerificationPipeline.js';
-import { AgentEvent } from '../types/agent-events.js';
-import { MiddlewarePipeline, MiddlewareContext, createMiddlewareContext } from './StreamMiddleware.js';
+import type { MemoryStore } from '../memory/MemoryStore.js';
+import type { CheckpointManager } from '../checkpoint/CheckpointManager.js';
+import type { ExceptionHandler } from '../exception/ExceptionHandler.js';
+import type { VerificationPipeline } from '../validation/VerificationPipeline.js';
+import type { AgentEvent } from '../types/agent-events.js';
+import { MiddlewarePipeline, createMiddlewareContext } from './StreamMiddleware.js';
 import { TokenCounterMiddleware } from './middleware/TokenCounterMiddleware.js';
 import { ContentAccumulatorMiddleware } from './middleware/ContentAccumulatorMiddleware.js';
 import { ToolDispatcherMiddleware } from './middleware/ToolDispatcherMiddleware.js';
@@ -23,6 +23,7 @@ import { autoAllowCanUseTool } from '../permission/ToolPermissionGate.js';
 import type { PermitStore } from '../permission/PermitStore.js';
 import type { TypedEventBus } from '../events/EventBus.js';
 import type { KyberEvents } from '../types/events.js';
+import type { TaskPermissionContract } from '../permission/TaskPermissionContract.js';
 
 export interface ReliabilityLayer {
   memory: MemoryStore;
@@ -67,6 +68,8 @@ export interface AgentLoopDeps {
 
   /** When set, tool dispatch emits `tool.call_start` / `tool.call_end` on this bus. */
   eventBus?: TypedEventBus<KyberEvents>;
+  /** 3.0 P0: active task permission contract snapshot provider. */
+  permissionContractProvider?: () => TaskPermissionContract | undefined;
 }
 
 
@@ -100,6 +103,7 @@ export async function* agentLoop(
     canAuthorizeBatch,
     permitStore,
     observability: toolObs,
+    permissionContractProvider: deps.permissionContractProvider,
   });
 
   const observeTaskLifecycle = (ev: AgentEvent): void => {

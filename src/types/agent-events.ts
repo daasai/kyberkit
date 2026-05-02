@@ -1,4 +1,4 @@
-import { StopReason, UsageInfo, MessageContent } from './model.js';
+import type { StopReason, UsageInfo, MessageContent } from './model.js';
 import type { TurnSummary } from './turn-summary.js';
 
 /**
@@ -110,6 +110,18 @@ export interface ToolProgressEvent {
   readonly percent?: number;
 }
 
+export interface ToolPermissionAudit {
+  readonly actorUserId?: string;
+  readonly agentSessionId?: string;
+  readonly taskId?: string;
+  readonly contractType?: 'ad_hoc' | 'recurring' | 'triggered';
+  readonly policyPack?: 'development' | 'balanced' | 'conservative';
+  readonly requestedPermission?: 'L0' | 'L1' | 'L2' | 'L3';
+  readonly effectivePermission?: 'allow' | 'deny' | 'needs_approval';
+  readonly approvalStatus?: 'not_required' | 'required' | 'approved' | 'denied';
+  readonly policyDecision?: { code: string; reason: string };
+}
+
 /** High-level phase of the agent turn (for status UI) */
 export interface TurnPhaseEvent {
   readonly type: 'turn_phase';
@@ -123,6 +135,7 @@ export interface ToolResultEvent {
   readonly toolName: string;
   readonly result: string;
   readonly isError: boolean;
+  readonly audit?: ToolPermissionAudit;
 }
 
 /** Token usage update (emitted at stream end) */

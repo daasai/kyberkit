@@ -1,6 +1,11 @@
-import type { AgentEvent, ToolProgressEvent, ToolResultEvent } from '../../types/agent-events.js';
-import { ToolIntegrationFacade, ToolUseContext } from '../../types/tool.js';
-import { PermissionSandbox } from '../../permission/PermissionSandbox.js';
+import type {
+  AgentEvent,
+  ToolPermissionAudit,
+  ToolProgressEvent,
+  ToolResultEvent,
+} from '../../types/agent-events.js';
+import type { ToolIntegrationFacade, ToolUseContext } from '../../types/tool.js';
+import type { PermissionSandbox } from '../../permission/PermissionSandbox.js';
 import type { ToolRuleChecker } from '../../tools/ToolRuleChecker.js';
 import type {
   BatchAuthPromptItem,
@@ -13,9 +18,15 @@ import {
   needsInteractiveGate,
 } from '../../permission/ToolPermissionGate.js';
 import { classifyToolCall, type PermissionLevel } from '../../permission/PermissionPolicy.js';
-import { PermitStore } from '../../permission/PermitStore.js';
+import type { PermitStore } from '../../permission/PermitStore.js';
 import type { TypedEventBus } from '../../events/EventBus.js';
 import type { KyberEvents } from '../../types/events.js';
+import {
+  type EffectivePermissionDecision,
+  type TaskPermissionContract,
+  isToolCallCoveredByContract,
+  requiresApprovalByPolicy,
+} from '../../permission/TaskPermissionContract.js';
 
 type Pending = { id: string; name: string; input: unknown };
 
@@ -30,11 +41,18 @@ export interface ToolDispatcherOptions {
   readonly canAuthorizeBatch?: CanAuthorizeBatchFn;
   readonly permitStore?: PermitStore;
   readonly observability?: ToolDispatchObservability;
+  readonly permissionContractProvider?: () => TaskPermissionContract | undefined;
 }
 
 type ValidatedRow = { tu: Pending; ctx: ToolUseContext; err: ToolResultEvent | null };
 
 const LEVEL_RANK: Record<PermissionLevel, number> = { L0: 0, L1: 1, L2: 2, L3: 3 };
+type PolicyEvaluation = {
+  readonly level: PermissionLevel;
+  readonly requiresApproval: boolean;
+  readonly decision: EffectivePermissionDecision;
+  readonly contract?: TaskPermissionContract;
+};
 
 /**
  * Executes tool_use blocks with progress events, optional interactive gate,
@@ -46,6 +64,8 @@ export class ToolDispatcherMiddleware {
   private readonly canAuthorizeBatch?: CanAuthorizeBatchFn;
   private readonly permitStore?: PermitStore;
   private readonly observability?: ToolDispatchObservability;
+  private readonly permissionContractProvider?: () => TaskPermissionContract | undefined;
+  private readonly policyByCallId = new Map<string, PolicyEvaluation>();
 
   constructor(
     private readonly tools: ToolIntegrationFacade,
@@ -67,6 +87,7 @@ export class ToolDispatcherMiddleware {
       this.canAuthorizeBatch = opts.canAuthorizeBatch;
       this.permitStore = opts.permitStore;
       this.observability = opts.observability;
+      this.permissionContractProvider = opts.permissionContractProvider;
     } else {
       this.ruleChecker = ruleCheckerOrOptions as ToolRuleChecker | undefined;
       this.canUseTool = canUseToolLegacy;
@@ -156,12 +177,30 @@ export class ToolDispatcherMiddleware {
           signal: new AbortController().signal,
         });
         if (decision === 'deny') {
+          this.setPolicyDecision(row.tu.id, {
+            effectivePermission: 'deny',
+            approvalStatus: 'denied',
+            policyDecision: {
+              code: 'approval_denied',
+              reason: 'interactive permission denied by user',
+            },
+          });
           promptDenied.set(row.tu.id, {
             type: 'tool_result',
             toolUseId: row.tu.id,
             toolName: row.tu.name,
             result: 'User denied tool execution (interactive permission).',
             isError: true,
+            audit: this.getAuditSnapshot(row.tu.id),
+          });
+        } else if (this.policyByCallId.get(row.tu.id)?.requiresApproval) {
+          this.setPolicyDecision(row.tu.id, {
+            effectivePermission: 'allow',
+            approvalStatus: 'approved',
+            policyDecision: {
+              code: 'approved',
+              reason: 'interactive approval granted',
+            },
           });
         }
       }
@@ -198,6 +237,9 @@ export class ToolDispatcherMiddleware {
       for (const r of results) {
         yield r;
       }
+      for (const row of validated) {
+        this.policyByCallId.delete(row.tu.id);
+      }
       i += batch.length;
     }
   }
@@ -209,6 +251,13 @@ export class ToolDispatcherMiddleware {
    */
   private shouldGateInteractive(tu: Pending, tool: ReturnType<ToolIntegrationFacade['findTool']>): boolean {
     const clas = classifyToolCall(tu.name, tu.input);
+    const policy = this.policyByCallId.get(tu.id);
+    if (policy && policy.decision.effectivePermission === 'deny') return false;
+    if (policy?.requiresApproval) {
+      if (clas.level === 'L3') return true;
+      if (this.permitStore?.check(tu.name, clas.level)) return false;
+      return true;
+    }
     if (clas.level === 'L0') return false;
     if (clas.level === 'L3') return true;
     if (this.permitStore?.check(tu.name, clas.level)) return false;
@@ -260,6 +309,7 @@ export class ToolDispatcherMiddleware {
       toolName: tu.name,
       result: `Unknown tool: ${tu.name}`,
       isError: true,
+      audit: this.getAuditSnapshot(tu.id),
     };
   }
 
@@ -273,12 +323,14 @@ export class ToolDispatcherMiddleware {
     if (err) {
       yield this.progress(tu, 'done', 'finished');
       yield err;
+      this.policyByCallId.delete(tu.id);
       return;
     }
     const tool = this.tools.findTool(tu.name);
     if (!tool) {
       yield this.progress(tu, 'done', 'finished');
       yield this.unknown(tu);
+      this.policyByCallId.delete(tu.id);
       return;
     }
     if (this.shouldGateInteractive(tu, tool)) {
@@ -287,6 +339,14 @@ export class ToolDispatcherMiddleware {
         signal: new AbortController().signal,
       });
       if (decision === 'deny') {
+        this.setPolicyDecision(tu.id, {
+          effectivePermission: 'deny',
+          approvalStatus: 'denied',
+          policyDecision: {
+            code: 'approval_denied',
+            reason: 'interactive permission denied by user',
+          },
+        });
         yield this.progress(tu, 'done', 'finished');
         yield {
           type: 'tool_result',
@@ -294,13 +354,26 @@ export class ToolDispatcherMiddleware {
           toolName: tu.name,
           result: 'User denied tool execution (interactive permission).',
           isError: true,
+          audit: this.getAuditSnapshot(tu.id),
         };
+        this.policyByCallId.delete(tu.id);
         return;
+      }
+      if (this.policyByCallId.get(tu.id)?.requiresApproval) {
+        this.setPolicyDecision(tu.id, {
+          effectivePermission: 'allow',
+          approvalStatus: 'approved',
+          policyDecision: {
+            code: 'approved',
+            reason: 'interactive approval granted',
+          },
+        });
       }
     }
     const r = await this.invokeCall(tu, ctx, tool);
     yield this.progress(tu, 'done', 'finished');
     yield r;
+    this.policyByCallId.delete(tu.id);
   }
 
   private progress(tu: Pending, phase: ToolProgressEvent['phase'], message?: string): ToolProgressEvent {
@@ -317,6 +390,19 @@ export class ToolDispatcherMiddleware {
     tu: Pending,
     agentContext: ToolUseContext,
   ): Promise<ToolResultEvent | null> {
+    const policy = this.evaluatePolicy(tu);
+    this.policyByCallId.set(tu.id, policy);
+    if (policy.decision.effectivePermission === 'deny') {
+      return {
+        type: 'tool_result',
+        toolUseId: tu.id,
+        toolName: tu.name,
+        result: `Policy denied: ${policy.decision.policyDecision.reason}`,
+        isError: true,
+        audit: this.getAuditSnapshot(tu.id),
+      };
+    }
+
     const tool = this.tools.findTool(tu.name);
     if (!tool) {
       return {
@@ -325,6 +411,7 @@ export class ToolDispatcherMiddleware {
         toolName: tu.name,
         result: `Unknown tool: ${tu.name}`,
         isError: true,
+        audit: this.getAuditSnapshot(tu.id),
       };
     }
 
@@ -336,6 +423,7 @@ export class ToolDispatcherMiddleware {
         toolName: tu.name,
         result: deny,
         isError: true,
+        audit: this.getAuditSnapshot(tu.id),
       };
     }
 
@@ -348,6 +436,7 @@ export class ToolDispatcherMiddleware {
           toolName: tu.name,
           result: `Permission denied for tool: ${tu.name}`,
           isError: true,
+          audit: this.getAuditSnapshot(tu.id),
         };
       }
 
@@ -360,6 +449,7 @@ export class ToolDispatcherMiddleware {
             toolName: tu.name,
             result: `Validation failed: ${valid.errors?.map((e) => e.message).join('; ')}`,
             isError: true,
+            audit: this.getAuditSnapshot(tu.id),
           };
         }
       }
@@ -370,6 +460,7 @@ export class ToolDispatcherMiddleware {
         toolName: tu.name,
         result: `Error executing tool: ${e.message}`,
         isError: true,
+        audit: this.getAuditSnapshot(tu.id),
       };
     }
 
@@ -388,6 +479,7 @@ export class ToolDispatcherMiddleware {
         toolName: tu.name,
         agentId: obs.getAgentId(),
         input: tu.input,
+        audit: this.getAuditSnapshot(tu.id),
       });
     }
     try {
@@ -398,6 +490,7 @@ export class ToolDispatcherMiddleware {
         toolName: tu.name,
         result: (result.output as string) ?? 'Success',
         isError: !result.success,
+        audit: this.getAuditSnapshot(tu.id),
       };
       if (obs) {
         obs.bus.emit('tool.call_end', {
@@ -405,6 +498,7 @@ export class ToolDispatcherMiddleware {
           agentId: obs.getAgentId(),
           duration: Date.now() - t0,
           success: !ev.isError,
+          audit: this.getAuditSnapshot(tu.id),
         });
       }
       return ev;
@@ -416,6 +510,7 @@ export class ToolDispatcherMiddleware {
           agentId: obs.getAgentId(),
           duration: Date.now() - t0,
           success: false,
+          audit: this.getAuditSnapshot(tu.id),
         });
       }
       return {
@@ -424,8 +519,152 @@ export class ToolDispatcherMiddleware {
         toolName: tu.name,
         result: `Error executing tool: ${msg}`,
         isError: true,
+        audit: this.getAuditSnapshot(tu.id),
       };
     }
+  }
+
+  private evaluatePolicy(tu: Pending): PolicyEvaluation {
+    const clas = classifyToolCall(tu.name, tu.input);
+    const hardDeny = this.matchImmutableDenyList(tu);
+    if (hardDeny) {
+      return {
+        level: clas.level,
+        requiresApproval: false,
+        decision: {
+          effectivePermission: 'deny',
+          approvalStatus: 'denied',
+          policyDecision: {
+            code: 'deny_list_hit',
+            reason: hardDeny,
+          },
+        },
+      };
+    }
+
+    const contract = this.permissionContractProvider?.();
+    if (!contract) {
+      return {
+        level: clas.level,
+        requiresApproval: false,
+        contract: undefined,
+        decision: {
+          effectivePermission: 'allow',
+          approvalStatus: 'not_required',
+          policyDecision: {
+            code: 'allow',
+            reason: 'no active contract (legacy fallback)',
+          },
+        },
+      };
+    }
+
+    const inScope = isToolCallCoveredByContract(contract, tu.name, clas.level);
+    if (!inScope.inScope) {
+      return {
+        level: clas.level,
+        requiresApproval: false,
+        contract,
+        decision: {
+          effectivePermission: 'deny',
+          approvalStatus: 'denied',
+          policyDecision: {
+            code: 'contract_scope_miss',
+            reason: `tool ${tu.name} at ${clas.level} is outside active contract`,
+          },
+        },
+      };
+    }
+
+    const requiresApproval =
+      inScope.matched?.approvalRequired === true ||
+      requiresApprovalByPolicy(contract.policyPack, clas.level);
+    if (requiresApproval) {
+      return {
+        level: clas.level,
+        requiresApproval: true,
+        contract,
+        decision: {
+          effectivePermission: 'needs_approval',
+          approvalStatus: 'required',
+          policyDecision: {
+            code: 'approval_required',
+            reason: `policy ${contract.policyPack} requires approval for ${clas.level}`,
+          },
+        },
+      };
+    }
+    return {
+      level: clas.level,
+      requiresApproval: false,
+      contract,
+      decision: {
+        effectivePermission: 'allow',
+        approvalStatus: 'not_required',
+        policyDecision: {
+          code: 'allow',
+          reason: 'contract and policy allow this call',
+        },
+      },
+    };
+  }
+
+  private matchImmutableDenyList(tu: Pending): string | null {
+    if (tu.name === 'bash') {
+      const cmd =
+        tu.input &&
+        typeof tu.input === 'object' &&
+        typeof (tu.input as { command?: unknown }).command === 'string'
+          ? (tu.input as { command: string }).command.trim()
+          : '';
+      const verb = cmd.split(/\s+/)[0]?.split('/').pop()?.toLowerCase();
+      if (verb === 'sudo' || verb === 'su' || verb === 'doas') {
+        return `immutable deny-list: privileged shell command "${verb}"`;
+      }
+    }
+    if (tu.name === 'delete_file') {
+      const p =
+        tu.input &&
+        typeof tu.input === 'object' &&
+        typeof (tu.input as { path?: unknown }).path === 'string'
+          ? (tu.input as { path: string }).path
+          : '';
+      if (p.includes('.kyberkit')) {
+        return 'immutable deny-list: deleting .kyberkit state is forbidden';
+      }
+    }
+    return null;
+  }
+
+  private getAuditSnapshot(toolUseId: string): ToolPermissionAudit | undefined {
+    const evalResult = this.policyByCallId.get(toolUseId);
+    if (!evalResult) return undefined;
+    return {
+      actorUserId: evalResult.contract?.actorUserId,
+      agentSessionId: evalResult.contract?.agentSessionId,
+      taskId: evalResult.contract?.taskId,
+      contractType: evalResult.contract?.contractType,
+      policyPack: evalResult.contract?.policyPack,
+      requestedPermission: evalResult.level,
+      effectivePermission: evalResult.decision.effectivePermission,
+      approvalStatus: evalResult.decision.approvalStatus,
+      policyDecision: evalResult.decision.policyDecision,
+    };
+  }
+
+  private setPolicyDecision(
+    toolUseId: string,
+    next: Pick<EffectivePermissionDecision, 'effectivePermission' | 'approvalStatus' | 'policyDecision'>,
+  ): void {
+    const prev = this.policyByCallId.get(toolUseId);
+    if (!prev) return;
+    this.policyByCallId.set(toolUseId, {
+      ...prev,
+      decision: {
+        ...prev.decision,
+        ...next,
+      },
+    });
   }
 }
 

@@ -40,6 +40,7 @@ import { SessionMemoryExtractor } from '../memory/extractors/SessionMemoryExtrac
 import { LongTermMemoryExtractor } from '../memory/extractors/LongTermMemoryExtractor.js';
 import type { CanAuthorizeBatchFn, CanUseToolFn } from '../permission/ToolPermissionGate.js';
 import { PermitStore } from '../permission/PermitStore.js';
+import { createDefaultAdHocContract, type PolicyPack } from '../permission/TaskPermissionContract.js';
 
 export class KyberRuntime {
   private bus!: TypedEventBus<KyberEvents>;
@@ -50,6 +51,8 @@ export class KyberRuntime {
   private workspaceRegistry!: WorkspaceRegistry;
   private activeWorkspaceId: string = 'default';
   private workspaceGrowth: WorkspaceGrowthStore | null = null;
+  private actorUserId: string = 'default';
+  private policyPack: PolicyPack = 'development';
 
   /** Mutable reference shared by all `AgentLoopDeps` from this runtime (TUI tool prompts). */
   private readonly toolPermissionOutlet: {
@@ -136,6 +139,11 @@ export class KyberRuntime {
       workspaceId: process.env.KYBER_WORKSPACE_ID ?? 'default',
       spacesRoot: process.env.KYBER_SPACES_ROOT,
     });
+    this.actorUserId = pathInfo.userName;
+    const envPolicyPack = process.env.KYBER_POLICY_PACK;
+    if (envPolicyPack === 'development' || envPolicyPack === 'balanced' || envPolicyPack === 'conservative') {
+      this.policyPack = envPolicyPack;
+    }
     await ensureWorkspaceSeed({
       userRoot: pathInfo.userRoot,
       projectKKPath: join(process.cwd(), 'KK.md'),
@@ -437,6 +445,13 @@ export class KyberRuntime {
       toolPermission: this.toolPermissionOutlet,
       permitStore: this.permitStore,
       eventBus: this.bus,
+      permissionContractProvider: () =>
+        createDefaultAdHocContract({
+          taskId: this.permitStore.getCurrentTaskId() ?? `adhoc.${agent.id}`,
+          actorUserId: this.actorUserId,
+          agentSessionId: agent.id,
+          policyPack: this.policyPack,
+        }),
     };
 
   }

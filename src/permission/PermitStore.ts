@@ -155,6 +155,10 @@ export class PermitStore {
     if (this.currentTaskId === taskId) this.currentTaskId = null;
   }
 
+  getCurrentTaskId(): string | null {
+    return this.currentTaskId;
+  }
+
   private evictTaskGrants(): void {
     if (this.currentTaskId === null) return;
     const tid = this.currentTaskId;

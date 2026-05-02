@@ -34,6 +34,7 @@ function redactEvent(event: AgentEvent): unknown {
         toolName: event.toolName,
         resultLen: event.result.length,
         isError: event.isError,
+        audit: event.audit,
       };
     case 'tool_use_complete':
       return { type: event.type, toolUseId: event.toolUseId, toolName: event.toolName, inputHash: shortHash(JSON.stringify(event.input)) };
@@ -58,7 +59,6 @@ export class TrajectoryRecorder {
   /** Sum of per-chunk usage deltas for the active natural turn (finalizeTurn persists these). */
   private turnInputTokens = 0;
   private turnOutputTokens = 0;
-  private lastUsage: { inputTokens: number; outputTokens: number } | null = null;
   private narrationTitle: string | null = null;
   private lastStopReason: string | undefined;
   /** Current task_id (from task_plan events); resets on task_complete. */
@@ -91,7 +91,6 @@ export class TrajectoryRecorder {
     this.turnInputTokens = 0;
     this.turnOutputTokens = 0;
     this.toolStart.clear();
-    this.lastUsage = null;
     this.narrationTitle = null;
     this.lastStopReason = undefined;
   }
@@ -172,10 +171,6 @@ export class TrajectoryRecorder {
     if (event.type === 'usage') {
       this.turnInputTokens += event.usage.inputTokens ?? 0;
       this.turnOutputTokens += event.usage.outputTokens ?? 0;
-      this.lastUsage = {
-        inputTokens: this.turnInputTokens,
-        outputTokens: this.turnOutputTokens,
-      };
     }
 
     if (event.type === 'turn_complete') {
