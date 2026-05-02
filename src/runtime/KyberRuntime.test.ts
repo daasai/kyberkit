@@ -112,7 +112,7 @@ describe('KyberRuntime (M8)', () => {
     expect(deps.model).toBe(runtime.getModel());
     expect(deps.tools).toBe(runtime.getTools());
     expect(deps.sandbox).toBe(runtime.getSandbox());
-    expect(deps.pipeline.size).toBe(3);
+    expect(deps.pipeline.size).toBe(4); // TokenCounter + ContentAccumulator + Narrator + OutputGuard
     
     // Sprint 2 verification
     expect(deps.promptAssembler).toBeDefined();

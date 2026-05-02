@@ -22,6 +22,7 @@ import { ExceptionHandler } from '../exception/ExceptionHandler.js';
 import { VerificationPipeline } from '../validation/VerificationPipeline.js';
 import type { MiddlewarePipeline } from '../agent/StreamMiddleware.js';
 import type { SkillSuggestionRunner } from '../skills/SkillSuggestionRunner.js';
+import type { LearningLoopMiddleware } from '../learning/LearningLoopMiddleware.js';
 import type { AssetRecord } from '../types/turn-summary.js';
 
 // ─── Public API Types ────────────────────────────────────────────────────────
@@ -56,6 +57,11 @@ export interface CreateSessionOptions {
    * Track B — async Skill draft suggestion after tool-heavy tasks.
    */
   skillSuggestion?: SkillSuggestionRunner;
+  /**
+   * 3.0 P0.5 — LearningLoop orchestrates evolution changelog + skill suggestion.
+   * When provided, supersedes `skillSuggestion` for post-task learning.
+   */
+  learningLoop?: LearningLoopMiddleware;
 }
 
 export interface ReliabilityBuildConfig {
@@ -152,6 +158,7 @@ export class AgentSession {
   private readonly cleanup?: () => Promise<void>;
   private readonly trajectory?: TrajectoryRecorder;
   private readonly skillRunner?: SkillSuggestionRunner;
+  private readonly learningLoop?: LearningLoopMiddleware;
 
   private turnToolLog: Array<{ name: string; input: unknown }> = [];
   private lastUserText = '';
@@ -176,7 +183,7 @@ export class AgentSession {
     reliability: ReliabilityLayer,
     cleanup?: () => Promise<void>,
     trajectory?: TrajectoryRecorder,
-    extras?: { skillSuggestion?: SkillSuggestionRunner },
+    extras?: { skillSuggestion?: SkillSuggestionRunner; learningLoop?: LearningLoopMiddleware },
   ) {
     this.id = id;
     this.agent = agent;
@@ -185,6 +192,7 @@ export class AgentSession {
     this.cleanup = cleanup;
     this.trajectory = trajectory;
     this.skillRunner = extras?.skillSuggestion;
+    this.learningLoop = extras?.learningLoop;
   }
 
   /** Returns a snapshot of the current cumulative usage. */
@@ -305,7 +313,12 @@ export class AgentSession {
 
         if (event.type === 'task_complete') {
           const start = taskTokenStart.get(event.taskId);
-          this.skillRunner?.schedule(event, this.turnToolLog, this.lastUserText);
+          // 3.0 P0.5: prefer LearningLoop (changelog + skill) over bare SkillSuggestionRunner
+          if (this.learningLoop) {
+            this.learningLoop.schedule(event, this.turnToolLog, this.lastUserText);
+          } else {
+            this.skillRunner?.schedule(event, this.turnToolLog, this.lastUserText);
+          }
           let taskAssets: AssetRecord[] = [];
           try {
             if (this.deps.eventBus) {

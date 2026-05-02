@@ -27,6 +27,7 @@ import {
   isToolCallCoveredByContract,
   requiresApprovalByPolicy,
 } from '../../permission/TaskPermissionContract.js';
+import type { OutputGuardChecker } from './OutputGuardMiddleware.js';
 
 type Pending = { id: string; name: string; input: unknown };
 
@@ -42,6 +43,8 @@ export interface ToolDispatcherOptions {
   readonly permitStore?: PermitStore;
   readonly observability?: ToolDispatchObservability;
   readonly permissionContractProvider?: () => TaskPermissionContract | undefined;
+  /** 3.0 P0.5: input-side prompt-injection checker. */
+  readonly outputGuardChecker?: OutputGuardChecker;
 }
 
 type ValidatedRow = { tu: Pending; ctx: ToolUseContext; err: ToolResultEvent | null };
@@ -65,6 +68,7 @@ export class ToolDispatcherMiddleware {
   private readonly permitStore?: PermitStore;
   private readonly observability?: ToolDispatchObservability;
   private readonly permissionContractProvider?: () => TaskPermissionContract | undefined;
+  private readonly outputGuardChecker?: OutputGuardChecker;
   private readonly policyByCallId = new Map<string, PolicyEvaluation>();
 
   constructor(
@@ -88,6 +92,7 @@ export class ToolDispatcherMiddleware {
       this.permitStore = opts.permitStore;
       this.observability = opts.observability;
       this.permissionContractProvider = opts.permissionContractProvider;
+      this.outputGuardChecker = opts.outputGuardChecker;
     } else {
       this.ruleChecker = ruleCheckerOrOptions as ToolRuleChecker | undefined;
       this.canUseTool = canUseToolLegacy;
@@ -398,6 +403,35 @@ export class ToolDispatcherMiddleware {
         toolUseId: tu.id,
         toolName: tu.name,
         result: `Policy denied: ${policy.decision.policyDecision.reason}`,
+        isError: true,
+        audit: this.getAuditSnapshot(tu.id),
+      };
+    }
+
+    // 3.0 P0.5 — input-side injection check (runs after policy allows)
+    const inputViolation = this.outputGuardChecker?.checkInput(tu.name, tu.input);
+    if (inputViolation) {
+      this.setPolicyDecision(tu.id, {
+        effectivePermission: 'deny',
+        approvalStatus: 'denied',
+        policyDecision: {
+          code: 'input_injection_blocked',
+          reason: inputViolation.reason,
+        },
+      });
+      this.observability?.bus.emit('output_guard.blocked', {
+        direction: 'input',
+        toolName: tu.name,
+        ruleId: inputViolation.ruleId,
+        reason: inputViolation.reason,
+        taskId: this.policyByCallId.get(tu.id)?.contract?.taskId,
+        agentId: this.observability.getAgentId(),
+      });
+      return {
+        type: 'tool_result',
+        toolUseId: tu.id,
+        toolName: tu.name,
+        result: `[OutputGuard] Input blocked — ${inputViolation.reason} (rule: ${inputViolation.ruleId})`,
         isError: true,
         audit: this.getAuditSnapshot(tu.id),
       };

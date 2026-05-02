@@ -41,6 +41,9 @@ import { LongTermMemoryExtractor } from '../memory/extractors/LongTermMemoryExtr
 import type { CanAuthorizeBatchFn, CanUseToolFn } from '../permission/ToolPermissionGate.js';
 import { PermitStore } from '../permission/PermitStore.js';
 import { createDefaultAdHocContract, type PolicyPack } from '../permission/TaskPermissionContract.js';
+import { OutputGuardChecker, OutputGuardMiddleware } from '../agent/middleware/OutputGuardMiddleware.js';
+import { LearningLoopMiddleware } from '../learning/LearningLoopMiddleware.js';
+import { EvolutionChangelog } from '../learning/EvolutionChangelog.js';
 
 export class KyberRuntime {
   private bus!: TypedEventBus<KyberEvents>;
@@ -53,6 +56,8 @@ export class KyberRuntime {
   private workspaceGrowth: WorkspaceGrowthStore | null = null;
   private actorUserId: string = 'default';
   private policyPack: PolicyPack = 'development';
+  /** Shared, stateless injection checker reused across sessions. */
+  private outputGuardChecker!: OutputGuardChecker;
 
   /** Mutable reference shared by all `AgentLoopDeps` from this runtime (TUI tool prompts). */
   private readonly toolPermissionOutlet: {
@@ -187,6 +192,7 @@ export class KyberRuntime {
     }
 
     // 7. Ready
+    this.outputGuardChecker = new OutputGuardChecker();
     console.log(
       `[KyberKit] Runtime bootstrapped. Loaded ${this.tools.listAll().length} model tools; ${this.tools.listSkillMetas?.().length ?? 0} skills.`,
     );
@@ -348,8 +354,15 @@ export class KyberRuntime {
       skillsDir: join(userRoot, 'skills'),
     });
 
+    const learningLoop = new LearningLoopMiddleware({
+      changelog: new EvolutionChangelog(join(userRoot, '.kyberkit', 'evolution-changelog.md')),
+      eventBus: this.bus,
+      skillRunner,
+    });
+
     return new AgentSession(sessionId, agent, deps, reliability, cleanup, trajectory, {
       skillSuggestion: opts.skillSuggestion ?? skillRunner,
+      learningLoop,
     });
   }
 
@@ -428,6 +441,16 @@ export class KyberRuntime {
       resolvedPipeline.use(memoryTrigger);
     }
 
+    // 3.0 P0.5 — output-side injection guard added to pipeline after tool results flow through
+    resolvedPipeline.use(
+      new OutputGuardMiddleware({
+        checker: this.outputGuardChecker,
+        eventBus: this.bus,
+        agentId: agent.id,
+        getTaskId: () => this.permitStore.getCurrentTaskId(),
+      }),
+    );
+
     return {
       agent,
       model: this.model,
@@ -452,6 +475,7 @@ export class KyberRuntime {
           agentSessionId: agent.id,
           policyPack: this.policyPack,
         }),
+      outputGuardChecker: this.outputGuardChecker,
     };
 
   }

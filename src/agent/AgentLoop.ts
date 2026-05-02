@@ -1,4 +1,4 @@
-import { DefaultAgentInstance } from './AgentInstance.js';
+import type { DefaultAgentInstance } from './AgentInstance.js';
 import { isTerminal } from './AgentStateMachine.js';
 import type { ModelProvider, MessageContent, StopReason } from '../types/model.js';
 import type { ToolIntegrationFacade } from '../types/tool.js';
@@ -24,6 +24,7 @@ import type { PermitStore } from '../permission/PermitStore.js';
 import type { TypedEventBus } from '../events/EventBus.js';
 import type { KyberEvents } from '../types/events.js';
 import type { TaskPermissionContract } from '../permission/TaskPermissionContract.js';
+import type { OutputGuardChecker } from './middleware/OutputGuardMiddleware.js';
 
 export interface ReliabilityLayer {
   memory: MemoryStore;
@@ -70,6 +71,8 @@ export interface AgentLoopDeps {
   eventBus?: TypedEventBus<KyberEvents>;
   /** 3.0 P0: active task permission contract snapshot provider. */
   permissionContractProvider?: () => TaskPermissionContract | undefined;
+  /** 3.0 P0.5: input-side prompt-injection checker for ToolDispatcherMiddleware. */
+  outputGuardChecker?: OutputGuardChecker;
 }
 
 
@@ -104,6 +107,7 @@ export async function* agentLoop(
     permitStore,
     observability: toolObs,
     permissionContractProvider: deps.permissionContractProvider,
+    outputGuardChecker: deps.outputGuardChecker,
   });
 
   const observeTaskLifecycle = (ev: AgentEvent): void => {

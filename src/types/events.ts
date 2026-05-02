@@ -125,4 +125,26 @@ export type KyberEvents = {
   // Middleware
   'middleware.registered': { name: string };
   'middleware.error': { name: string; error: Error };
+
+  // OutputGuard events (3.0 P0.5)
+  /** Fired when a prompt-injection pattern is detected in a tool input or output. */
+  'output_guard.blocked': {
+    direction: 'input' | 'output';
+    toolName: string;
+    ruleId: string;
+    reason: string;
+    taskId?: string;
+    agentId?: string;
+  };
+
+  // LearningLoop events (3.0 P0.5)
+  /** Fired after each qualifying task_complete: changelog written, skill suggested. */
+  'learning_loop.evolved': {
+    taskId: string;
+    mission: string;
+    rollbackCheckpointId?: string;
+    changelogPath: string;
+    toolCalls: number;
+    skillSuggested: boolean;
+  };
 }
