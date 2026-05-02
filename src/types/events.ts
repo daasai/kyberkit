@@ -147,4 +147,14 @@ export type KyberEvents = {
     toolCalls: number;
     skillSuggested: boolean;
   };
+
+  // Capability Decomposition events (3.0 P0.5)
+  /** Fired after /decompose completes: goal decomposed into contract + skill chain. */
+  'capability_decomposition.completed': {
+    draftId: string;
+    goal: string;
+    contractType: 'ad_hoc' | 'recurring' | 'triggered';
+    skillChainLength: number;
+    draftPath: string;
+  };
 }

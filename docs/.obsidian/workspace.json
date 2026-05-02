@@ -185,6 +185,7 @@
   },
   "active": "6cbffcedfbd905ec",
   "lastOpenFiles": [
+    "specs/3.0/capability-decomposition.md",
     "specs/3.0/learning-loop-and-outputguard.md",
     "specs/3.0/audit-and-outputguard.md",
     "specs/3.0/policy-and-permission-gate.md",
@@ -215,7 +216,6 @@
     "Clippings/Hermes Agent 架构全解：自进化单体智能体的学习循环与四层内存设计-腾讯云开发者社区-腾讯云.md",
     "deepcc/09-tool-execution-engine-deep-dive.md",
     "Clippings",
-    "hermes/output-control-engineering.md",
     "reviews"
   ]
 }

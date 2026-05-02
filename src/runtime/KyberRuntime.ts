@@ -13,6 +13,9 @@ import { DefaultToolIntegrationFacade } from '../tools/facade/ToolIntegrationFac
 import { createBuiltinTools } from '../tools/builtin/createBuiltinTools.js';
 import { BuiltinToolRegistry } from '../tools/builtin/BuiltinToolRegistry.js';
 import { SkillInvokeCommand } from '../commands/builtin/SkillInvokeCommand.js';
+import { DecomposeCommand } from '../commands/builtin/DecomposeCommand.js';
+import { CapabilityDecomposer } from '../learning/CapabilityDecomposer.js';
+import { ContractDraftStore } from '../learning/ContractDraftStore.js';
 import { AnthropicProvider } from '../model/AnthropicProvider.js';
 import { DefaultAgentInstance } from '../agent/AgentInstance.js';
 import { ConfigError } from '../types/errors.js';
@@ -190,6 +193,27 @@ export class KyberRuntime {
         new SkillInvokeCommand(meta.name, meta.description, meta.body),
       );
     }
+
+    // 3.0 P0.5 — /decompose command: LLM-powered capability decomposition
+    const draftStore = new ContractDraftStore(join(kRoot, 'contract-drafts'));
+    const decomposer = new CapabilityDecomposer({
+      model: this.model,
+      compactModel: this.config.model.compactModel ?? this.config.model.name,
+      fallbackModel: this.config.model.name,
+      store: draftStore,
+      eventBus: this.bus,
+    });
+    this.getActiveWorkspace().commandRegistry.register(
+      new DecomposeCommand({
+        decomposer,
+        getContext: () => ({
+          actorUserId: this.actorUserId,
+          policyPack: this.policyPack,
+        }),
+        getSkills: () => this.tools.listSkillMetas?.() ?? [],
+        draftsDir: join(kRoot, 'contract-drafts'),
+      }),
+    );
 
     // 7. Ready
     this.outputGuardChecker = new OutputGuardChecker();
