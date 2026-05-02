@@ -157,4 +157,34 @@ export type KyberEvents = {
     skillChainLength: number;
     draftPath: string;
   };
+
+  // Contract lifecycle events (3.0 P1)
+  'contract.activated': { contractId: string; contractType: 'ad_hoc' | 'recurring' | 'triggered' };
+  'contract.paused': { contractId: string; reason: string };
+  'contract.revoked': { contractId: string };
+  'contract.expired': { contractId: string };
+  /** Emitted by RecurringScheduler or TriggeredScheduler when a contract is due to run. */
+  'contract.run.due': {
+    contractId: string;
+    contractType: 'recurring' | 'triggered';
+    triggeredBy: 'schedule' | 'event';
+    eventPayload?: unknown;
+    scheduledAt: number;
+  };
+  /** Emitted when drift thresholds (token budget / failure streak) are exceeded. */
+  'contract.drift.detected': {
+    contractId: string;
+    reason: string;
+    metric: 'daily_token_budget' | 'failure_streak';
+    value: number;
+    threshold: number;
+  };
+
+  // External event bus (3.0 P1 — Connector integration entry point)
+  /** Published by Connectors (logs, WeCom, etc.) to signal external events. */
+  'external.event': {
+    source: string;
+    payload: unknown;
+    receivedAt: number;
+  };
 }

@@ -47,6 +47,11 @@ import { createDefaultAdHocContract, type PolicyPack } from '../permission/TaskP
 import { OutputGuardChecker, OutputGuardMiddleware } from '../agent/middleware/OutputGuardMiddleware.js';
 import { LearningLoopMiddleware } from '../learning/LearningLoopMiddleware.js';
 import { EvolutionChangelog } from '../learning/EvolutionChangelog.js';
+import { ContractRegistry } from '../scheduler/ContractRegistry.js';
+import { DriftDetector } from '../scheduler/DriftDetector.js';
+import { RecurringScheduler } from '../scheduler/RecurringScheduler.js';
+import { TriggeredScheduler } from '../scheduler/TriggeredScheduler.js';
+import { ContractCommand } from '../commands/builtin/ContractCommand.js';
 
 export class KyberRuntime {
   private bus!: TypedEventBus<KyberEvents>;
@@ -70,6 +75,12 @@ export class KyberRuntime {
 
   /** Sprint 3.5 §4.2 — runtime-scoped grant store shared across sessions. */
   private permitStore!: PermitStore;
+
+  /** 3.0 P1 — contract lifecycle registry and schedulers. */
+  private contractRegistry!: ContractRegistry;
+  private recurringScheduler!: RecurringScheduler;
+  private triggeredScheduler!: TriggeredScheduler;
+  private driftDetector!: DriftDetector;
 
 
   /**
@@ -215,6 +226,33 @@ export class KyberRuntime {
       }),
     );
 
+    // 3.0 P1 — contract registry + schedulers
+    this.driftDetector = new DriftDetector();
+    this.contractRegistry = new ContractRegistry({
+      registryPath: join(kRoot, 'contracts', 'registry.json'),
+      eventBus: this.bus,
+    });
+    await this.contractRegistry.load();
+
+    this.recurringScheduler = new RecurringScheduler({
+      registry: this.contractRegistry,
+      driftDetector: this.driftDetector,
+      eventBus: this.bus,
+    });
+    this.triggeredScheduler = new TriggeredScheduler({
+      registry: this.contractRegistry,
+      eventBus: this.bus,
+    });
+    this.recurringScheduler.start();
+    this.triggeredScheduler.start();
+
+    this.getActiveWorkspace().commandRegistry.register(
+      new ContractCommand({
+        registry: this.contractRegistry,
+        draftStore,
+      }),
+    );
+
     // 7. Ready
     this.outputGuardChecker = new OutputGuardChecker();
     console.log(
@@ -281,6 +319,22 @@ export class KyberRuntime {
     } catch {
       return undefined;
     }
+  }
+
+  /** 3.0 P1 — contract lifecycle registry (activated/pause/revoke). */
+  getContractRegistry(): ContractRegistry { return this.contractRegistry; }
+
+  /** 3.0 P1 — drift detector (record run outcomes for contracts). */
+  getDriftDetector(): DriftDetector { return this.driftDetector; }
+
+  /**
+   * Graceful shutdown: stops schedulers and flushes pending state.
+   * Call this before process exit in production.
+   */
+  async shutdown(): Promise<void> {
+    this.recurringScheduler?.stop();
+    this.triggeredScheduler?.stop();
+    await this.contractRegistry?.save().catch(() => undefined);
   }
 
   /**
