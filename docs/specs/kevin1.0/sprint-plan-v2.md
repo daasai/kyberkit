@@ -102,7 +102,7 @@ const session = await runtime.createSession({ reliability: 'inmemory' })
 | Sprint 1 | Foundation & UI Shell | ✅ **完成** | 三面板、Milkdown、SSE 通信全部交付 |
 | Sprint 2 | Context & MCP | ✅ **主体完成** | Runtime、Trajectory、Sidecar `ArtifactParser` + 前端 `ArtifactContext` 已落地；Task 2.2 MCP 需各环境自行验收 |
 | Sprint 3 | Sessions & Scenario A | 🔄 **收尾中** | 多会话 API、SQLite、`SessionContext`、Center Tab、RightPanel 快速启动已落地；将 prompt 抽到 `app/src/data/templates.ts`、Center Tab 切换时拉取 artifact、Sprint 4 Tauri 仍待做 |
-| Sprint 4 | Polish & Tauri | 📋 **待启动** | Demo 封版 + 桌面端打包 |
+| Sprint 4 | Polish & Tauri | 🔄 **进行中** | `app/src-tauri` 已初始化（`npm run tauri:dev` / `tauri:build`）；Sidecar 随应用启停、打包 env 仍待做 |
 
 ---
 
