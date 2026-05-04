@@ -6,7 +6,7 @@
  * artifact to display in the CenterPanel.
  */
 
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { SIDECAR_URL } from '../config/sidecarUrl'
 
 export interface SessionMeta {
@@ -31,6 +31,9 @@ const SessionContext = createContext<SessionContextType | null>(null)
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  /** Always latest id for polling — avoids stale closure resetting selection every interval. */
+  const activeSessionIdRef = useRef<string | null>(null)
+  activeSessionIdRef.current = activeSessionId
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -38,14 +41,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (!res.ok) return
       const data: SessionMeta[] = await res.json()
       setSessions(data)
-      // Auto-select the most recent session if none active
-      if (data.length > 0 && (activeSessionId === null || !data.find(s => s.id === activeSessionId))) {
+      const current = activeSessionIdRef.current
+      // Auto-select newest only when nothing selected or current id no longer exists
+      if (data.length > 0 && (current === null || !data.some((s) => s.id === current))) {
         setActiveSessionId(data[0].id)
       }
     } catch {
       // Sidecar not running yet
     }
-  }, [activeSessionId])
+  }, [])
 
   const createSession = useCallback(async (): Promise<string> => {
     const res = await fetch(`${SIDECAR_URL}/sessions`, { method: 'POST' })
@@ -57,18 +61,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const deleteSession = useCallback(async (id: string) => {
     await fetch(`${SIDECAR_URL}/sessions/${id}`, { method: 'DELETE' })
-    setSessions(prev => prev.filter(s => s.id !== id))
-    if (activeSessionId === id) {
-      setActiveSessionId(sessions.find(s => s.id !== id)?.id ?? null)
-    }
-  }, [activeSessionId, sessions])
+    setSessions(prev => {
+      const filtered = prev.filter(s => s.id !== id)
+      if (activeSessionIdRef.current === id) {
+        setActiveSessionId(filtered[0]?.id ?? null)
+      }
+      return filtered
+    })
+  }, [])
 
   // Poll sessions periodically so the sidebar stays fresh
   useEffect(() => {
-    refreshSessions()
-    const interval = setInterval(refreshSessions, 5000)
+    void refreshSessions()
+    const interval = setInterval(() => {
+      void refreshSessions()
+    }, 5000)
     return () => clearInterval(interval)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [refreshSessions])
 
   return (
     <SessionContext.Provider value={{

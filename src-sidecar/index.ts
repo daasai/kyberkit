@@ -11,9 +11,11 @@
  *   POST /chat (deprecated)            → legacy, routes to default session
  */
 
+import { randomUUID } from 'crypto'
 import { KyberRuntime } from '../src/runtime/KyberRuntime.js'
 import { SessionManager } from './SessionManager.js'
 import { ArtifactParser } from './ArtifactParser.js'
+import { summarizeArtifactMarkdown } from './artifactSummary.js'
 import { dbListChatMessages, dbPersistChatTurn } from './db.js'
 
 const PORT = 3001
@@ -143,6 +145,7 @@ Bun.serve({
       const parser = new ArtifactParser()
       let artifactAccum = ''
       let inArtifact = false
+      let currentArtifactId: string | null = null
 
       manager.lockSession(sessionId)
 
@@ -167,16 +170,24 @@ Bun.serve({
                   if (e.type === 'artifact_start') {
                     inArtifact = true
                     artifactAccum = ''
-                    emit({ type: 'artifact_start', sessionId })
+                    currentArtifactId = randomUUID()
+                    emit({ type: 'artifact_start', sessionId, artifact_id: currentArtifactId })
                   } else if (e.type === 'artifact_delta') {
                     artifactAccum += e.text
                     emit({ type: 'artifact_delta', text: e.text })
                   } else if (e.type === 'artifact_end') {
                     inArtifact = false
-                    emit({ type: 'artifact_end', sessionId })
+                    const summary = summarizeArtifactMarkdown(artifactAccum)
+                    emit({
+                      type: 'artifact_end',
+                      sessionId,
+                      artifact_id: currentArtifactId,
+                      summary,
+                    })
                     // Persist artifact to DB
                     manager.saveArtifact(sessionId, artifactAccum)
                     emit({ type: 'session_updated', session: manager.list().find((s) => s.id === sessionId) })
+                    currentArtifactId = null
                   } else if (e.type === 'text_delta') {
                     assistantPlain += e.text
                     emit(e)
@@ -200,12 +211,25 @@ Bun.serve({
             // Flush any buffered text in the parser
             const flushed = parser.flush()
             for (const e of flushed) {
-              if (e.type === 'artifact_delta') {
+              if (e.type === 'artifact_start') {
+                inArtifact = true
+                artifactAccum = ''
+                currentArtifactId = randomUUID()
+                emit({ type: 'artifact_start', sessionId, artifact_id: currentArtifactId })
+              } else if (e.type === 'artifact_delta') {
                 artifactAccum += e.text
                 emit({ type: 'artifact_delta', text: e.text })
               } else if (e.type === 'artifact_end') {
-                emit({ type: 'artifact_end', sessionId })
+                inArtifact = false
+                emit({
+                  type: 'artifact_end',
+                  sessionId,
+                  artifact_id: currentArtifactId,
+                  summary: summarizeArtifactMarkdown(artifactAccum),
+                })
                 manager.saveArtifact(sessionId, artifactAccum)
+                emit({ type: 'session_updated', session: manager.list().find((s) => s.id === sessionId) })
+                currentArtifactId = null
               } else if (e.type === 'text_delta') {
                 assistantPlain += e.text
                 emit(e)
@@ -214,10 +238,18 @@ Bun.serve({
               }
             }
 
-            // If we were mid-artifact when stream ended, close it
+            // If stream ended while still inside <artifact> (no closing tag), close once
             if (inArtifact) {
+              inArtifact = false
               manager.saveArtifact(sessionId, artifactAccum)
-              emit({ type: 'artifact_end', sessionId })
+              emit({
+                type: 'artifact_end',
+                sessionId,
+                artifact_id: currentArtifactId,
+                summary: summarizeArtifactMarkdown(artifactAccum),
+              })
+              emit({ type: 'session_updated', session: manager.list().find((s) => s.id === sessionId) })
+              currentArtifactId = null
             }
 
           } catch (err: unknown) {

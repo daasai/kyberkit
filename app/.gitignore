@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# ./kevin PID + logs
+.dev/
+
 # Playwright
 /test-results/
 /playwright-report/

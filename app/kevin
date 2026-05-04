@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Kevin 开发环境：启动 / 停止 / 重启 Sidecar（Bun）与 Vite 前端。
+# 用法：./kevin start|stop|restart|status
+# 可选环境变量：VITE_PORT（默认 5173）。Sidecar 监听端口见 src-sidecar/index.ts（默认 3001）。
+
+set -u
+
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${APP_DIR}/.." && pwd)"
+PID_DIR="${APP_DIR}/.dev"
+SIDECAR_PID="${PID_DIR}/sidecar.pid"
+VITE_PID="${PID_DIR}/vite.pid"
+SIDECAR_LOG="${PID_DIR}/sidecar.log"
+VITE_LOG="${PID_DIR}/vite.log"
+VITE_PORT="${VITE_PORT:-5173}"
+
+mkdir -p "${PID_DIR}"
+
+is_running() {
+  local f="$1"
+  [[ -f "$f" ]] || return 1
+  local pid
+  pid="$(cat "$f" 2>/dev/null || true)"
+  [[ -n "${pid}" ]] || return 1
+  kill -0 "${pid}" 2>/dev/null
+}
+
+stop_one() {
+  local name="$1" pidfile="$2"
+  if [[ ! -f "${pidfile}" ]]; then
+    echo "[${name}] 未找到 PID 文件（可能未启动）。"
+    return 0
+  fi
+  local pid
+  pid="$(cat "${pidfile}" 2>/dev/null || true)"
+  if [[ -z "${pid}" ]]; then
+    rm -f "${pidfile}"
+    return 0
+  fi
+  if kill -0 "${pid}" 2>/dev/null; then
+    echo "[${name}] 停止进程 ${pid}…"
+    kill "${pid}" 2>/dev/null || true
+    sleep 1
+    if kill -0 "${pid}" 2>/dev/null; then
+      echo "[${name}] 强制结束 ${pid}…"
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+  else
+    echo "[${name}] PID 文件存在但进程已不存在，清理 PID 文件。"
+  fi
+  rm -f "${pidfile}"
+}
+
+cmd_start() {
+  if is_running "${SIDECAR_PID}"; then
+    echo "[sidecar] 已在运行 (PID $(cat "${SIDECAR_PID}"))。"
+  else
+    echo "[sidecar] 启动中… 日志: ${SIDECAR_LOG}"
+    (
+      cd "${ROOT_DIR}" || exit 1
+      nohup bun src-sidecar/index.ts >>"${SIDECAR_LOG}" 2>&1 &
+      echo $! >"${SIDECAR_PID}"
+    )
+    sleep 1
+    if ! is_running "${SIDECAR_PID}"; then
+      echo "[sidecar] 启动失败，请查看 ${SIDECAR_LOG}"
+      rm -f "${SIDECAR_PID}"
+      return 1
+    fi
+    echo "[sidecar] 已启动 (PID $(cat "${SIDECAR_PID}"))。"
+  fi
+
+  if is_running "${VITE_PID}"; then
+    echo "[vite] 已在运行 (PID $(cat "${VITE_PID}"))。"
+  else
+    if [[ ! -f "${APP_DIR}/node_modules/.bin/vite" ]]; then
+      echo "[vite] 未找到 node_modules/.bin/vite，请先在本目录执行: npm install"
+      return 1
+    fi
+    echo "[vite] 启动中… http://127.0.0.1:${VITE_PORT}/  日志: ${VITE_LOG}"
+    (
+      cd "${APP_DIR}" || exit 1
+      nohup ./node_modules/.bin/vite --host 127.0.0.1 --port "${VITE_PORT}" >>"${VITE_LOG}" 2>&1 &
+      echo $! >"${VITE_PID}"
+    )
+    sleep 1
+    if ! is_running "${VITE_PID}"; then
+      echo "[vite] 启动失败，请查看 ${VITE_LOG}"
+      rm -f "${VITE_PID}"
+      return 1
+    fi
+    echo "[vite] 已启动 (PID $(cat "${VITE_PID}"))。"
+  fi
+}
+
+cmd_stop() {
+  stop_one "vite" "${VITE_PID}"
+  stop_one "sidecar" "${SIDECAR_PID}"
+  echo "已全部停止。"
+}
+
+cmd_status() {
+  if is_running "${SIDECAR_PID}"; then
+    echo "[sidecar] 运行中 PID=$(cat "${SIDECAR_PID}")  http://127.0.0.1:3001/health"
+  else
+    echo "[sidecar] 未运行"
+  fi
+  if is_running "${VITE_PID}"; then
+    echo "[vite]    运行中 PID=$(cat "${VITE_PID}")  http://127.0.0.1:${VITE_PORT}/"
+  else
+    echo "[vite]    未运行"
+  fi
+}
+
+case "${1:-}" in
+  start)
+    cmd_start
+    ;;
+  stop)
+    cmd_stop
+    ;;
+  restart)
+    cmd_stop
+    sleep 1
+    cmd_start
+    ;;
+  status)
+    cmd_status
+    ;;
+  *)
+    echo "用法: $0 {start|stop|restart|status}"
+    echo ""
+    echo "  start    启动 Bun Sidecar（仓库根）与 Vite（本目录）"
+    echo "  stop     按 PID 文件停止上述进程"
+    echo "  restart  先 stop 再 start"
+    echo "  status   查看是否在运行"
+    echo ""
+    echo "可选: VITE_PORT=5174 $0 start"
+    exit 1
+    ;;
+esac

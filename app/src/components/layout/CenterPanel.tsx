@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { Editor, rootCtx, defaultValueCtx } from '@milkdown/core'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
 import { gfm } from '@milkdown/kit/preset/gfm'
@@ -7,6 +7,8 @@ import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/re
 import { replaceAll } from '@milkdown/utils'
 import { useArtifact } from '../../contexts/ArtifactContext'
 import { useSession } from '../../contexts/SessionContext'
+import { KEVIN_FOCUS_CENTER_EVENT } from '../../lib/focusCenter'
+import { SIDECAR_URL } from '../../config/sidecarUrl'
 
 const WELCOME_MARKDOWN = `# 欢迎使用 Kevin
 
@@ -25,28 +27,46 @@ Kevin 生成的文档将显示在这里。
 
 function MilkdownEditor({ content, streaming }: { content: string; streaming: boolean }) {
   const [, getEditor] = useInstance()
-  const lastContent = useRef('')
+  const lastMarkdown = useRef<string | null>(null)
 
   useEditor((root) =>
     Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, root)
-        ctx.set(defaultValueCtx, content || WELCOME_MARKDOWN)
+        // Initial paint; incremental updates go through replaceAll below.
+        ctx.set(defaultValueCtx, WELCOME_MARKDOWN)
       })
       .use(commonmark)
       .use(gfm)
       .use(history),
   )
 
-  // Update editor when artifact content changes
+  // Sync welcome or artifact — wait until ProseMirror is ready (getEditor is often null on first paint).
   useEffect(() => {
-    if (!content) return
-    if (content === lastContent.current) return
-    lastContent.current = content
+    const markdown = content.trim().length > 0 ? content : WELCOME_MARKDOWN
+    if (markdown === lastMarkdown.current) return
 
-    const editor = getEditor()
-    if (editor) {
-      editor.action(replaceAll(content))
+    let cancelled = false
+    let attempts = 0
+    const maxAttempts = 120
+
+    const tick = () => {
+      if (cancelled) return
+      const editor = getEditor()
+      if (editor) {
+        lastMarkdown.current = markdown
+        editor.action(replaceAll(markdown))
+        return
+      }
+      attempts += 1
+      if (attempts < maxAttempts) {
+        requestAnimationFrame(tick)
+      }
+    }
+
+    requestAnimationFrame(tick)
+    return () => {
+      cancelled = true
     }
   }, [content, getEditor])
 
@@ -66,9 +86,24 @@ function MilkdownEditor({ content, streaming }: { content: string; streaming: bo
 }
 
 export function CenterPanel() {
-  const { artifact } = useArtifact()
-  const { sessions, activeSessionId } = useSession()
+  const { artifact, loadArtifact, clearArtifact } = useArtifact()
+  const { sessions, activeSessionId, setActiveSessionId } = useSession()
   const [openTabIds, setOpenTabIds] = useState<string[]>([])
+  const [centerFlash, setCenterFlash] = useState(false)
+  const canvasAnchorRef = useRef<HTMLDivElement>(null)
+
+  const onFocusCenterRequest = useCallback(() => {
+    document.getElementById('kevin-center-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+    canvasAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    setCenterFlash(true)
+    window.setTimeout(() => setCenterFlash(false), 1200)
+  }, [])
+
+  useEffect(() => {
+    const handler = () => onFocusCenterRequest()
+    window.addEventListener(KEVIN_FOCUS_CENTER_EVENT, handler)
+    return () => window.removeEventListener(KEVIN_FOCUS_CENTER_EVENT, handler)
+  }, [onFocusCenterRequest])
 
   // Add session to open tabs when it becomes active
   useEffect(() => {
@@ -81,6 +116,26 @@ export function CenterPanel() {
     e.stopPropagation()
     setOpenTabIds(prev => prev.filter(tid => tid !== id))
   }
+
+  /** Keep Milkdown in sync when switching tabs (same as LeftSidebar session select). */
+  const activateSessionTab = useCallback(
+    async (id: string) => {
+      setActiveSessionId(id)
+      try {
+        const res = await fetch(`${SIDECAR_URL}/sessions/${id}`)
+        if (!res.ok) return
+        const data = (await res.json()) as { artifactContent?: string }
+        if (data.artifactContent?.trim()) {
+          loadArtifact(id, data.artifactContent)
+        } else {
+          clearArtifact()
+        }
+      } catch {
+        /* ignore */
+      }
+    },
+    [setActiveSessionId, loadArtifact, clearArtifact],
+  )
 
   const getTabLabel = (id: string): string => {
     const session = sessions.find(s => s.id === id)
@@ -99,6 +154,9 @@ export function CenterPanel() {
       flexDirection: 'column',
       backgroundColor: 'var(--color-background)',
       overflow: 'hidden',
+      outline: centerFlash ? '2px solid color-mix(in srgb, var(--color-primary) 55%, transparent)' : 'none',
+      outlineOffset: centerFlash ? '-2px' : 0,
+      transition: 'outline-color 0.35s ease',
     }}>
       {/* Tab Bar */}
       <div style={{
@@ -136,6 +194,13 @@ export function CenterPanel() {
                   key={id}
                   role="button"
                   tabIndex={0}
+                  onClick={() => void activateSessionTab(id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      void activateSessionTab(id)
+                    }
+                  }}
                   style={{
                     padding: '8px 12px',
                     fontSize: '13px', fontWeight: 500,
@@ -215,8 +280,8 @@ export function CenterPanel() {
 
       {/* Scrollable Canvas */}
       <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '40px 48px' }}>
-        <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-          <MilkdownProvider>
+        <div id="kevin-center-canvas-anchor" ref={canvasAnchorRef} style={{ maxWidth: '800px', margin: '0 auto' }}>
+          <MilkdownProvider key={activeSessionId ?? 'welcome'}>
             <MilkdownEditor content={displayContent} streaming={isStreaming} />
           </MilkdownProvider>
         </div>

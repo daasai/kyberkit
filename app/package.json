@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:up": "./kevin start",
+    "dev:down": "./kevin stop",
+    "dev:restart": "./kevin restart",
+    "dev:status": "./kevin status",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",

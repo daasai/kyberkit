@@ -100,8 +100,8 @@ const session = await runtime.createSession({ reliability: 'inmemory' })
 | Sprint | 主题 | 状态 | 说明 |
 |---|---|---|---|
 | Sprint 1 | Foundation & UI Shell | ✅ **完成** | 三面板、Milkdown、SSE 通信全部交付 |
-| Sprint 2 | Context & MCP | 🔄 **进行中** | Task 2.1/2.3 已完成；Task 2.2/2.4 待收尾；3 个架构偏差待修正 |
-| Sprint 3 | Sessions & Scenario A | 📋 **待启动** | 见 `sprint3-Sessions&ScenarioA.md` |
+| Sprint 2 | Context & MCP | ✅ **主体完成** | Runtime、Trajectory、Sidecar `ArtifactParser` + 前端 `ArtifactContext` 已落地；Task 2.2 MCP 需各环境自行验收 |
+| Sprint 3 | Sessions & Scenario A | 🔄 **收尾中** | 多会话 API、SQLite、`SessionContext`、Center Tab、RightPanel 快速启动已落地；将 prompt 抽到 `app/src/data/templates.ts`、Center Tab 切换时拉取 artifact、Sprint 4 Tauri 仍待做 |
 | Sprint 4 | Polish & Tauri | 📋 **待启动** | Demo 封版 + 桌面端打包 |
 
 ---
@@ -113,10 +113,10 @@ const session = await runtime.createSession({ reliability: 'inmemory' })
 | 任务 | 优先级 | 状态 |
 |---|---|---|
 | Task 2.1 — KyberRuntime 接入 | P0 | ✅ Done |
-| Task 2.2 — Filesystem MCP 验证 | P0 | ⬜ Pending |
+| Task 2.2 — Filesystem MCP 验证 | P0 | ⬜ 各环境验收（配置见 `.env.example`） |
 | Task 2.3 — 轨迹面板动态化 | P0 | ✅ Done |
-| Task 2.4 — Artifact SSE 事件协议（重新设计） | P0 | ⬜ Rewrite needed |
-| Task 2.5 — **[新增]** 修复 Sidecar 硬编码路径 | P0 | ⬜ Pending |
+| Task 2.4 — Artifact SSE 事件协议（重新设计） | P0 | ✅ Done（Sidecar `ArtifactParser` + SSE；前端 Context） |
+| Task 2.5 — **[新增]** 修复 Sidecar 硬编码路径 | P0 | ✅ Done（已移除 `process.chdir`，依赖 env） |
 
 ---
 
@@ -170,3 +170,4 @@ const session = await runtime.createSession({ reliability: 'inmemory' })
 | 日期 | 修订内容 |
 |---|---|
 | 2026-05-03 | 初版：基于 Agent Network Architecture Review 创建，取代旧 `sprint-plan.md` |
+| 2026-05-04 | 同步代码现状：Sprint 2/3 完成度、Task 2.4/2.5 状态；注明 Sprint 3 剩余（templates 抽取、Tab 切换 artifact、MCP 验收） |

@@ -12,6 +12,8 @@ function ArtifactAutoLoader() {
   const { activeSessionId } = useSession()
   const { loadArtifact, clearArtifact, artifact } = useArtifact()
   const loadedFor = useRef<string | null>(null)
+  const activeIdRef = useRef<string | null>(null)
+  activeIdRef.current = activeSessionId
 
   useEffect(() => {
     if (!activeSessionId) return
@@ -19,18 +21,20 @@ function ArtifactAutoLoader() {
     if (loadedFor.current === activeSessionId && !artifact.streaming) return
     if (artifact.streaming) return
 
-    loadedFor.current = activeSessionId
-    fetch(`${SIDECAR_URL}/sessions/${activeSessionId}`)
+    const sid = activeSessionId
+    fetch(`${SIDECAR_URL}/sessions/${sid}`)
       .then(r => r.json())
       .then(data => {
+        if (activeIdRef.current !== sid) return
+        loadedFor.current = sid
         if (data.artifactContent) {
-          loadArtifact(activeSessionId, data.artifactContent)
+          loadArtifact(sid, data.artifactContent)
         } else {
           clearArtifact()
         }
       })
       .catch(() => { /* Sidecar not ready */ })
-  }, [activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeSessionId, artifact.streaming, loadArtifact, clearArtifact])
 
   return null
 }
@@ -109,7 +113,7 @@ export function AppShell() {
           <ResizeHandle />
 
           <Panel defaultSize={savedSizes[1]} minSize={35}>
-            <div style={{ height: '100%', overflow: 'hidden' }}>
+            <div id="kevin-center-panel" style={{ height: '100%', overflow: 'hidden' }}>
               <CenterPanel />
             </div>
           </Panel>
