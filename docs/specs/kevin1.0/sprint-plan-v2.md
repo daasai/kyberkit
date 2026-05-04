@@ -52,7 +52,7 @@ Layer 4: Terminal   (app/)           — Kevin 桌面端，终端之一，非 Ru
 | Sprint 1 | Foundation & UI Shell | ✅ **完成** | 三面板、Milkdown、SSE 通信全部交付 |
 | Sprint 2 | Context & MCP | ✅ **主体完成** | Runtime、Trajectory、Sidecar `ArtifactParser` + 前端 `ArtifactContext` 已落地；Task 2.2 MCP 需各环境自行验收 |
 | Sprint 3 | Sessions & Scenario A | ✅ **完成** | 多会话、SQLite、动态会话列表、Center 多 Tab、`templates.ts`、快速启动、Tab 切换拉取 artifact；MCP 验收见 [mcp-filesystem-runbook.md](mcp-filesystem-runbook.md) |
-| Sprint 4 | Polish & Tauri | 🔄 **进行中** | Tauri 2 壳已集成；**开发态**自动启停 Bun Sidecar（端口占用则跳过）；生产 Sidecar 二进制化与 `.dmg` 验证仍待做 |
+| Sprint 4 | Polish & Tauri | ✅ **P0 完成** | Tauri 2 + `externalBin` Sidecar + 资源打包 + `kevin.env`；`npm run verify:kevin` 与 `tauri build` 已验证；DMG 为可选 target；飞书 MCP 仍为 P1 延期 |
 
 ---
 
@@ -94,11 +94,11 @@ Layer 4: Terminal   (app/)           — Kevin 桌面端，终端之一，非 Ru
 
 | 任务 | 优先级 | 状态 |
 |---|---|---|
-| Task 4.1 — Tauri 2.0 壳集成（Sidecar 自动启停） | P0 | 🔄 开发态已完成（见 `app/src-tauri/src/lib.rs`）；生产 bundle 仍依赖本机 `bun` + 源码路径 |
-| Task 4.2 — `.dmg` / `.app` 生产打包验证 | P0 | ⬜ 待在无开发环境机器上验证 |
-| Task 4.3 — Feishu Doc MCP（MVP 只读版） | P1 | ⬜ 见 [feishu-mcp-roadmap.md](feishu-mcp-roadmap.md) |
-| Task 4.4 — Demo 剧本 & 种子用户 Onboarding | P0 | 🔄 见 [demo-and-packaging.md](demo-and-packaging.md) |
-| Task 4.5 — 高优 Bug 修复 & 体验打磨 | P0 | 🔄 持续 |
+| Task 4.1 — Tauri 2.0 壳集成（Sidecar 自动启停） | P0 | ✅ Done（dev：`bun`+源码；release：`externalBin` + `KYBER_SPACES_ROOT` / `KYBERKIT_ENV_FILE`） |
+| Task 4.2 — `.dmg` / `.app` 生产打包验证 | P0 | ✅ `.app` 已验证构建；`npm run verify:kevin` 验证 Sidecar 二进制；DMG 见 [demo-and-packaging.md §3.1](demo-and-packaging.md) |
+| Task 4.3 — Feishu Doc MCP（MVP 只读版） | P1 | ⏸️ 延期（无凭据）— [feishu-mcp-roadmap.md](feishu-mcp-roadmap.md) |
+| Task 4.4 — Demo 剧本 & 种子用户 Onboarding | P0 | ✅ [demo-and-packaging.md](demo-and-packaging.md) + `npm run verify:kevin` |
+| Task 4.5 — 高优 Bug 修复 & 体验打磨 | P0 | 🔄 持续（非 blocking） |
 
 ---
 
@@ -120,3 +120,4 @@ Layer 4: Terminal   (app/)           — Kevin 桌面端，终端之一，非 Ru
 | 2026-05-03 | 初版：基于 Agent Network Architecture Review 创建，取代旧 `sprint-plan.md` |
 | 2026-05-04 | 同步代码现状：Sprint 2/3 完成度、Task 2.4/2.5 状态；注明 Sprint 3 剩余（templates 抽取、Tab 切换 artifact、MCP 验收） |
 | 2026-05-04 | 引入 `kevin-system-design.md`、runbook、demo 文档；§1.2 改为历史审计表；Sprint 3/4 任务表加状态列；Tauri 开发态 Sidecar 启停落地说明 |
+| 2026-05-04 | Sprint 4：`externalBin` 编译 Sidecar、`bundle.resources`、release 启动路径、`verify:kevin`；`.app` 构建与冒烟通过；DMG target 暂关；飞书 MCP P1 明确延期 |

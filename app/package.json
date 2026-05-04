@@ -10,12 +10,14 @@
     "dev:restart": "./kevin restart",
     "dev:status": "./kevin status",
     "build": "tsc -b && vite build",
+    "build:sidecar": "node ./scripts/compile-kevin-sidecar.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "verify:kevin": "node ./scripts/verify-kevin-release.mjs"
   },
   "dependencies": {
     "@milkdown/core": "^7.20.0",

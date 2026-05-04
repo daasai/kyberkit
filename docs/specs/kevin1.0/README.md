@@ -23,7 +23,7 @@
 | 文档 | 用途 |
 |------|------|
 | [mcp-filesystem-runbook.md](mcp-filesystem-runbook.md) | Filesystem MCP 启用与 `read_file` 验收步骤 |
-| [demo-and-packaging.md](demo-and-packaging.md) | 演示流程、健康检查、Tauri 构建与打包注意事项 |
+| [demo-and-packaging.md](demo-and-packaging.md) | 演示流程、健康检查、`npm run verify:kevin`、Tauri `.app` 构建与可选 DMG |
 | [feishu-mcp-roadmap.md](feishu-mcp-roadmap.md) | Sprint 4 P1：飞书文档 MCP（占位与范围） |
 
 ## 产品与探索

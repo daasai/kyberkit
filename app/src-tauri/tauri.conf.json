@@ -7,11 +7,12 @@
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:5173",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build && npm run build:sidecar"
   },
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Kevin",
         "width": 1280,
         "height": 840,
@@ -25,7 +26,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app"],
+    "externalBin": ["binaries/kevin-sidecar"],
+    "resources": {
+      "../../agents/kevin": "agents/kevin",
+      "../../spaces/default/data/templates": "spaces/default/data/templates"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

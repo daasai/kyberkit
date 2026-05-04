@@ -1,6 +1,6 @@
 # 飞书文档 MCP — 路线图（Sprint 4 P1）
 
-> **状态**: 未实现 — 占位规格  
+> **状态**: **Sprint 4 P1 延期** — 无飞书开放平台凭据前不进入开发队列  
 > **来源**: [sprint-plan-v2.md](sprint-plan-v2.md) Sprint 4 Task 4.3；[sprint3-Sessions&ScenarioA.md](sprint3-Sessions%26ScenarioA.md) Out of Scope
 
 ---

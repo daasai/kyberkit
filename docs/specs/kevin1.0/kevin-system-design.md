@@ -123,9 +123,12 @@ Sidecar 使用 `bun:sqlite`。数据库路径由 **`KYBER_SPACES_ROOT`**（及 `
 | `KEVIN_SKIP_SIDECAR_SPAWN=1` | Tauri **不** 自动启动 Sidecar（自行用 `kevin` 脚本或其它方式起） |
 | `KYBERKIT_REPO_ROOT` | 显式指定 Kyberkit 仓库根（含 `src-sidecar`） |
 
-### 7.4 生产打包（已知缺口）
+### 7.4 生产打包（已实现主干）
 
-- 当前仍假设目标机安装 **`bun`** 且可访问源码树中的 `src-sidecar/index.ts`。**正式 `.app` 分发**应改为：编译 Sidecar 为独立二进制、用 Tauri `externalBin` 或安装器释放资源，并在启动时注入 `KYBER_SPACES_ROOT` 指向 **应用数据目录**（非用户源码目录）。详见 [demo-and-packaging.md](demo-and-packaging.md)。
+- **`beforeBuildCommand`**：`npm run build && npm run build:sidecar` — 使用 `bun build --compile` 生成 `src-tauri/binaries/kevin-sidecar-<rustc-host-tuple>`，由 Tauri **`bundle.externalBin`** 打入 `.app/Contents/MacOS/`（安装名多为 `kevin-sidecar`，无 triple 后缀；Rust 启动逻辑会先尝试 `kevin-sidecar` 再回退 triple 文件名）。
+- **`bundle.resources`**：`agents/kevin` 与 `spaces/default/data/templates` 进入 `Contents/Resources/`，首次启动将模板 **复制** 到可写 `Application Support/.../Kevin/spaces/default/data/templates`（由 Rust `init_release_workspace` 完成）。
+- **密钥**：发布包通过 `KYBERKIT_ENV_FILE` 指向 `Application Support/.../Kevin/kevin.env`（用户自建，格式同 dotenv）；未配置时 LLM 调用会失败，属预期。
+- **DMG**：当前 `tauri.conf.json` 的 `bundle.targets` 为 **`["app"]`** 以便在无 `create-dmg`/hdiutil 完整链路的 CI 上稳定产出；需要 `.dmg` 时在 macOS 开发者机器上恢复 `dmg` target 并安装 Tauri 文档要求的 DMG 依赖。详见 [demo-and-packaging.md](demo-and-packaging.md)。
 
 ---
 

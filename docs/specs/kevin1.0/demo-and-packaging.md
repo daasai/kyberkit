@@ -32,15 +32,33 @@ curl -sS http://127.0.0.1:3001/health | head -c 400
 
 ```bash
 cd app
-npm run build
 npm run tauri:build
 ```
 
-产物位于 `app/src-tauri/target/release/bundle/`（`.app`、`.dmg` 等，视 `tauri.conf.json` 的 `bundle.targets` 而定）。
+`tauri build` 会先执行 `beforeBuildCommand`（`npm run build && npm run build:sidecar`）：Vite 产物进 `dist/`，Sidecar 编译为 **单文件原生二进制** 并作为 `externalBin` 打入应用包。
 
-**当前限制（实现态）**：
+**产物路径**：`app/src-tauri/target/release/bundle/macos/Kevin.app`
 
-- 自动 Sidecar 仍依赖本机 **`bun`** 与**可解析的仓库路径**；分发到无开发环境机器前，需完成「Sidecar 二进制化 + 资源路径 + `KYBER_SPACES_ROOT` 指向应用数据目录」改造（见 [kevin-system-design.md](kevin-system-design.md) §7.4）。
+**Sidecar 冒烟（不启动 GUI）** — 使用与发布包相同的编译二进制、仓库根 `.env`（若存在）：
+
+```bash
+cd app
+npm run verify:kevin
+```
+
+期望输出 `[verify-kevin-release] PASS` 且 `curl` 到的 `health.status === "ok"`。执行前请确保 **`3001` 端口未被占用**。
+
+### 3.1 `.dmg` 说明
+
+仓库当前将 `bundle.targets` 设为 **`["app"]`**，以避免部分环境缺少 DMG 打包依赖导致 `bundle_dmg.sh` 失败。需要磁盘映像分发时，在已配置 Tauri DMG 依赖的 macOS 上把 `targets` 改回包含 `"dmg"` 再构建。
+
+### 3.2 发布包内密钥与 `kevin.env`
+
+首次从 Finder 启动 Kevin 时，请将含 `ANTHROPIC_API_KEY`（等）的 dotenv 文件保存为：
+
+`~/Library/Application Support/ai.kyberkit.kevin/Kevin/kevin.env`
+
+（具体 `Application Support` 子路径以 Tauri `identifier` `ai.kyberkit.kevin` 为准，见 [kevin-system-design.md](kevin-system-design.md) §7。）
 
 ---
 

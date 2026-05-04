@@ -18,6 +18,33 @@ import { ArtifactParser } from './ArtifactParser.js'
 import { summarizeArtifactMarkdown } from './artifactSummary.js'
 import { dbListChatMessages, dbPersistChatTurn } from './db.js'
 
+/** Optional dotenv-style file (Tauri sets `KYBERKIT_ENV_FILE` in release). Does not override existing env. */
+async function applyKevinEnvFile(): Promise<void> {
+  const p = process.env.KYBERKIT_ENV_FILE?.trim()
+  if (!p) return
+  const f = Bun.file(p)
+  if (!(await f.exists())) return
+  const text = await f.text()
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) continue
+    const ix = t.indexOf('=')
+    if (ix <= 0) continue
+    const key = t.slice(0, ix).trim()
+    if (!key || process.env[key]) continue
+    let val = t.slice(ix + 1).trim()
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1)
+    }
+    process.env[key] = val
+  }
+}
+
+await applyKevinEnvFile()
+
 const PORT = 3001
 const startedAt = Date.now()
 
