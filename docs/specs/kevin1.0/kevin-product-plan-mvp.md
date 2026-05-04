@@ -4,6 +4,8 @@
 > **更新日期**: 2026-05-03
 > **产品代号**: Kevin (以区分之前的底层 Runtime 规划)
 > **核心定位**: 贝壳内部 AI 工作日 —— 飞书生态之上的 AI 应用层与知识工作者生产力工作台。
+>
+> **工程实现态（技术）**：[kevin-system-design.md](kevin-system-design.md) · [sprint-plan-v2.md](sprint-plan-v2.md)
 
 ## 1. 产品愿景与 MVP 定位
 
