@@ -46,6 +46,8 @@ export interface AgentLoopDeps {
   commandRegistry?: import('../commands/CommandRegistry.js').CommandRegistry;
   // Sprint 2: Workspace context
   workspace?: import('../runtime/WorkspaceInstance.js').WorkspaceInstance;
+  /** Product-level hard directives injected into prompt assembly. */
+  platformDirective?: string;
   // Sprint 4: Turn-begin context compaction guard
   compactionGuard?: import('./middleware/CompactionGuardMiddleware.js').CompactionGuardMiddleware;
   /** When set, agentLoop awaits this before reading L2 memory so async extraction has merged. */
@@ -174,6 +176,7 @@ export async function* agentLoop(
     if (deps.promptAssembler) {
       const assembled = await deps.promptAssembler.assemble({
         budget: 30000,
+        platformDirective: deps.platformDirective,
         cwd: process.cwd(),
         tools: toolRowsForPrompt,
         memoryContext,

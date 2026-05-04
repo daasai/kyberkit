@@ -3,8 +3,8 @@
  * Sprint 2, Step 5.
  */
 
-import { AssetManifest } from './assets.js';
-import { WorkspaceConfig } from './workspace.js';
+import type { AssetManifest } from './assets.js';
+import type { WorkspaceConfig } from './workspace.js';
 
 /** A single section of a system prompt */
 export interface PromptSection {
@@ -36,6 +36,8 @@ export interface AssembledPrompt {
 export interface AssemblyContext {
   /** Maximum token budget for the system prompt */
   budget: number;
+  /** Product-level hard directives (e.g. artifact protocol). */
+  platformDirective?: string;
   /** Current working directory */
   cwd?: string;
   /** List of available tools (for the Tools section) */

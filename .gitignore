@@ -23,3 +23,6 @@ build/
 coverage/
 
 references/
+
+# Local workspace state (Kevin / KyberKit SQLite, WAL)
+spaces/**/.kyberkit/

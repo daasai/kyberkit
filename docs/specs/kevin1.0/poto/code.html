@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Kevin Workspace - Enterprise AI</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Manrope:wght@600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-tertiary-fixed": "#311300",
+                      "secondary-fixed": "#d5e3fc",
+                      "surface-container-low": "#f6f2fa",
+                      "inverse-surface": "#303036",
+                      "on-surface-variant": "#474651",
+                      "on-error": "#ffffff",
+                      "on-tertiary-fixed-variant": "#70380b",
+                      "inverse-on-surface": "#f3eff7",
+                      "secondary": "#515f74",
+                      "primary-fixed": "#e2dfff",
+                      "inverse-primary": "#c3c0ff",
+                      "surface": "#fcf8ff",
+                      "background": "#fcf8ff",
+                      "primary-fixed-dim": "#c3c0ff",
+                      "on-surface": "#1b1b21",
+                      "surface-container-lowest": "#ffffff",
+                      "primary-container": "#312e81",
+                      "surface-container": "#f0ecf4",
+                      "secondary-container": "#d5e3fc",
+                      "on-primary-fixed-variant": "#3e3c8f",
+                      "tertiary-fixed": "#ffdbc7",
+                      "secondary-fixed-dim": "#b9c7df",
+                      "on-background": "#1b1b21",
+                      "on-error-container": "#93000a",
+                      "on-primary-container": "#9c9af4",
+                      "error-container": "#ffdad6",
+                      "error": "#ba1a1a",
+                      "on-secondary-fixed-variant": "#3a485b",
+                      "tertiary": "#3e1a00",
+                      "on-tertiary-container": "#de915e",
+                      "tertiary-fixed-dim": "#ffb688",
+                      "on-primary": "#ffffff",
+                      "surface-container-highest": "#e5e1e9",
+                      "on-secondary-fixed": "#0d1c2e",
+                      "surface-variant": "#e5e1e9",
+                      "outline": "#777682",
+                      "surface-dim": "#dcd9e0",
+                      "tertiary-container": "#5f2b00",
+                      "surface-container-high": "#eae7ef",
+                      "on-secondary-container": "#57657a",
+                      "surface-tint": "#5654a8",
+                      "on-tertiary": "#ffffff",
+                      "on-primary-fixed": "#100563",
+                      "surface-bright": "#fcf8ff",
+                      "primary": "#1a146b",
+                      "on-secondary": "#ffffff",
+                      "outline-variant": "#c8c5d3"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "xl": "32px",
+                      "sm": "12px",
+                      "md": "16px",
+                      "xs": "8px",
+                      "margin": "24px",
+                      "lg": "24px",
+                      "base": "4px",
+                      "gutter": "20px"
+              },
+              "fontFamily": {
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "code": [
+                              "monospace"
+                      ],
+                      "label-sm": [
+                              "Inter"
+                      ],
+                      "body-lg": [
+                              "Inter"
+                      ],
+                      "h3": [
+                              "Manrope"
+                      ],
+                      "h2": [
+                              "Manrope"
+                      ],
+                      "label-md": [
+                              "Inter"
+                      ],
+                      "h1": [
+                              "Manrope"
+                      ]
+              },
+              "fontSize": {
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "code": [
+                              "13px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "label-sm": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.02em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-lg": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "h3": [
+                              "20px",
+                              {
+                                      "lineHeight": "28px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "h2": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "label-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "500"
+                              }
+                      ],
+                      "h1": [
+                              "32px",
+                              {
+                                      "lineHeight": "40px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+    </script>
+<style>
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #e4e4e7;
+            border-radius: 10px;
+        }
+        .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+            background: #d4d4d8;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-md text-body-md h-screen overflow-hidden flex flex-col antialiased">
+<!-- Top Navigation Area -->
+<header class="flex justify-between items-center w-full px-6 h-14 sticky top-0 z-40 bg-surface-container-lowest border-b border-outline-variant">
+<div class="flex items-center gap-4">
+<div class="text-base font-bold text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">terminal</span>
+                Workspace Editor
+            </div>
+<div class="h-4 w-px bg-outline-variant mx-2"></div>
+<nav class="flex items-center gap-6">
+<a class="text-on-surface-variant font-label-md text-label-md pb-4 pt-4 hover:text-primary transition-colors flex items-center" href="#">
+                    Drafts
+                </a>
+<a class="text-primary font-label-md text-label-md pb-4 pt-4 border-b-2 border-primary flex items-center" href="#">
+                    Published
+                </a>
+<a class="text-on-surface-variant font-label-md text-label-md pb-4 pt-4 hover:text-primary transition-colors flex items-center" href="#">
+                    Reviews
+                </a>
+<a class="text-on-surface-variant font-label-md text-label-md pb-4 pt-4 hover:text-primary transition-colors flex items-center" href="#">
+                    Archive
+                </a>
+</nav>
+</div>
+<div class="flex items-center gap-3">
+<div class="flex items-center gap-1 mr-2 text-on-surface-variant">
+<button class="p-2 hover:bg-surface-container rounded-lg transition-colors">
+<span class="material-symbols-outlined">settings</span>
+</button>
+<button class="p-2 hover:bg-surface-container rounded-lg transition-colors relative">
+<span class="material-symbols-outlined">notifications</span>
+<span class="absolute top-2 right-2 w-2 h-2 bg-error rounded-full"></span>
+</button>
+</div>
+<button class="px-3 py-1.5 bg-surface-container-lowest border border-outline-variant text-on-surface rounded-lg font-label-sm text-label-sm hover:bg-surface-container transition-colors">
+                Export
+            </button>
+<button class="px-3 py-1.5 bg-primary text-on-primary rounded-lg font-label-sm text-label-sm hover:bg-primary-container transition-colors">
+                Share
+            </button>
+<div class="ml-2 w-8 h-8 rounded-full bg-primary-container flex items-center justify-center text-on-primary font-label-md text-label-md overflow-hidden">
+<img alt="User profile avatar" class="w-full h-full object-cover" data-alt="A clean, professional headshot photo of an individual in a minimalist, well-lit modern corporate environment, serving as an avatar. The lighting is soft and bright, emphasizing clarity and approachability, aligning with a sophisticated light-mode UI aesthetic. Colors are neutral with subtle professional tones." src="https://lh3.googleusercontent.com/aida/ADBb0uih3Y8uKPaDqKlXwuGcuv5kcm6t5PbfdDFX5DQG8j2pRh9gKjyVGZXg6VmIlULFdYFoPQsz9nBNxGeh__dDORxVtg9xnmBq0IS0BvPNy6GeleZokfISCn3PR4Ye9wwE1Sl6kGID2SvX9tQrzmYfWcX9yieLtucEAOLBRCNItejb4XKZ1FV8nzNtymhMECy2Mh7ex1yjsMFJtKn1iPeXT00BMTFriZz_vt_EQI0xhTX2aYCdwGhzoHXo5TE6dcA4ylOKle_clB94VQ"/>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- Left Sidebar -->
+<aside class="w-[260px] h-full bg-surface-container-lowest border-r border-outline-variant flex flex-col flex-shrink-0">
+<!-- Header -->
+<div class="flex-1 overflow-y-auto custom-scrollbar p-2">
+<!-- Top Menu -->
+<nav class="space-y-1 mb-6">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-primary bg-primary-container/10 font-label-md text-label-md hover:bg-primary-container/20 transition-colors" href="#">
+<span class="material-symbols-outlined text-sm">add</span>
+                        New
+                    </a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant font-label-md text-label-md hover:bg-surface-container hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-sm">search</span>
+                        Search
+                    </a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant font-label-md text-label-md hover:bg-surface-container hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-sm">extension</span>
+                        Plugins
+                    </a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant font-label-md text-label-md hover:bg-surface-container hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-sm">smart_toy</span>
+                        Automation
+                    </a>
+</nav>
+<!-- Context & Sources -->
+<div class="mb-6">
+<div class="px-3 mb-2 flex items-center justify-between text-on-surface-variant">
+<span class="font-label-sm text-label-sm uppercase tracking-wider">Context &amp; Sources</span>
+<span class="material-symbols-outlined text-sm cursor-pointer hover:text-on-surface">add</span>
+</div>
+<div class="space-y-1">
+<div class="group">
+<div class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-on-surface font-label-md text-label-md cursor-pointer hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-sm text-on-surface-variant transition-transform group-hover:text-on-surface">expand_more</span>
+<span class="material-symbols-outlined text-sm text-primary">folder_open</span>
+                                知识库
+                            </div>
+<div class="ml-9 mt-1 border-l border-outline-variant pl-2 space-y-1">
+<a class="block px-2 py-1.5 rounded-md text-on-surface-variant font-body-md text-[13px] hover:bg-surface-container hover:text-on-surface transition-colors" href="#">Project Docs</a>
+<a class="block px-2 py-1.5 rounded-md text-on-surface-variant font-body-md text-[13px] hover:bg-surface-container hover:text-on-surface transition-colors" href="#">Meeting Notes</a>
+<a class="block px-2 py-1.5 rounded-md text-on-surface-variant font-body-md text-[13px] hover:bg-surface-container hover:text-on-surface transition-colors" href="#">Tech Specs</a>
+</div>
+</div>
+<a class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-on-surface-variant font-label-md text-label-md hover:bg-surface-container hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-sm opacity-0">chevron_right</span>
+<span class="material-symbols-outlined text-sm text-tertiary-container">dataset</span>
+                            贝易转DW
+                        </a>
+<a class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-on-surface-variant font-label-md text-label-md hover:bg-surface-container hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-sm opacity-0">chevron_right</span>
+<span class="material-symbols-outlined text-sm text-secondary">monitor_heart</span>
+                            系统监控MCP
+                        </a>
+</div>
+</div>
+<!-- Recent Artifacts -->
+<div>
+<div class="px-3 mb-2 flex items-center justify-between text-on-surface-variant">
+<span class="font-label-sm text-label-sm uppercase tracking-wider">Recent Artifacts</span>
+<span class="material-symbols-outlined text-sm cursor-pointer hover:text-on-surface">add</span>
+</div>
+<div class="space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-container text-on-surface font-label-md text-label-md transition-colors relative before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:bg-primary before:rounded-r" href="#">
+<span class="material-symbols-outlined text-sm text-primary">description</span>
+<span class="truncate">Q2 Payment System PRD</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant font-label-md text-label-md hover:bg-surface-container hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-sm">table_chart</span>
+<span class="truncate">User Growth Data Analytics</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant font-label-md text-label-md hover:bg-surface-container hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-sm">bug_report</span>
+<span class="truncate">Auth Service RCA</span>
+</a>
+</div>
+</div>
+</div>
+<div class="p-4 border-t border-outline-variant">
+<button class="w-full py-2 bg-surface-container-lowest border border-outline-variant rounded-lg text-on-surface font-label-sm text-label-sm hover:bg-surface-container transition-colors flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-sm">bolt</span>
+                    Upgrade Plan
+                </button>
+</div>
+</aside>
+<!-- Center Main Content -->
+<main class="flex-1 flex flex-col bg-background relative overflow-hidden">
+<!-- Content Tabs -->
+<div class="h-12 border-b border-outline-variant flex items-center px-4 bg-surface-container-lowest shrink-0">
+<div class="flex space-x-1">
+<button class="px-4 py-2 bg-surface rounded-t-lg border border-b-0 border-outline-variant flex items-center gap-2 text-primary font-label-md text-label-md relative top-[1px]">
+<span class="material-symbols-outlined text-[16px]">description</span>
+                        PRD文档
+                    </button>
+<button class="px-4 py-2 text-on-surface-variant hover:bg-surface-container rounded-t-lg flex items-center gap-2 font-label-md text-label-md transition-colors">
+<span class="material-symbols-outlined text-[16px]">bar_chart</span>
+                        数据图表
+                    </button>
+<button class="px-4 py-2 text-on-surface-variant hover:bg-surface-container rounded-t-lg flex items-center gap-2 font-label-md text-label-md transition-colors">
+<span class="material-symbols-outlined text-[16px]">analytics</span>
+                        RCA报告
+                    </button>
+</div>
+<div class="ml-auto flex items-center gap-2 text-on-surface-variant">
+<button class="p-1.5 hover:bg-surface-container rounded transition-colors"><span class="material-symbols-outlined text-sm">edit</span></button>
+<button class="p-1.5 hover:bg-surface-container rounded transition-colors"><span class="material-symbols-outlined text-sm">more_horiz</span></button>
+</div>
+</div>
+<!-- Scrollable Content Canvas -->
+<div class="flex-1 overflow-y-auto custom-scrollbar p-8 lg:p-12 relative">
+<div class="max-w-4xl mx-auto">
+<!-- Title & Meta -->
+<div class="mb-10">
+<h1 class="font-h1 text-h1 text-on-surface mb-4"># Q2 支付系统升级 PRD</h1>
+<div class="flex flex-wrap items-center gap-4 text-on-surface-variant font-body-md text-body-md border-b border-outline-variant pb-6">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm">person</span>
+<span>Author: Product Team</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm">calendar_today</span>
+<span>Updated: Today</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 bg-secondary-container text-on-secondary-container rounded-full text-[12px] font-medium">In Progress</span>
+</div>
+</div>
+</div>
+<!-- Article Content (Mock Markdown) -->
+<article class="prose prose-zinc max-w-none text-on-surface space-y-6 font-body-md text-body-md leading-relaxed">
+<p>This document outlines the product requirements for the Q2 Payment System Upgrade. The primary goal is to enhance system stability, introduce support for new regional gateways, and improve the overall disaster recovery (DR) mechanisms.</p>
+<h2 class="font-h2 text-h2 mt-8 mb-4">1. 背景与目标 (Background &amp; Objectives)</h2>
+<p>随着业务在东南亚和欧洲市场的快速扩张，现有的支付网关架构面临了显著的性能瓶颈和单点故障风险。本次升级的核心目标包括：</p>
+<ul class="list-disc pl-5 space-y-2 text-on-surface-variant">
+<li><strong class="text-on-surface">提升吞吐量：</strong> 支持峰值 50,000 TPS。</li>
+<li><strong class="text-on-surface">容灾升级：</strong> 实现多活架构，单节点故障无感切换。</li>
+<li><strong class="text-on-surface">新增渠道：</strong> 接入 Stripe 和 Adyen 的最新 API。</li>
+</ul>
+<h2 class="font-h2 text-h2 mt-8 mb-4">2. 容灾架构设计 (Disaster Recovery Architecture)</h2>
+<p>为了保证金融级的高可用性，新的支付路由层将采用异地多活部署方案。</p>
+<!-- Bento-style Card Layout for System Components -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-6">
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded bg-primary-container/10 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined">dns</span>
+</div>
+<h3 class="font-h3 text-[16px] font-semibold text-on-surface">主干路由群集</h3>
+</div>
+<p class="text-[13px] text-on-surface-variant">负责接收全球流量，基于地理位置和渠道健康度进行动态路由。采用一致性哈希算法。</p>
+</div>
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded bg-error-container/20 flex items-center justify-center text-error">
+<span class="material-symbols-outlined">health_and_safety</span>
+</div>
+<h3 class="font-h3 text-[16px] font-semibold text-on-surface">熔断与降级机制</h3>
+</div>
+<p class="text-[13px] text-on-surface-variant">实时监控下游网关状态。当失败率超过 5% 时自动熔断，降级至备用通道，保障核心交易。</p>
+</div>
+</div>
+<!-- Code Block Example -->
+<div class="mt-6 rounded-lg overflow-hidden border border-outline-variant">
+<div class="bg-surface-container px-4 py-2 flex items-center justify-between">
+<span class="font-code text-code text-on-surface-variant">RoutingLogic.java</span>
+<button class="text-on-surface-variant hover:text-on-surface"><span class="material-symbols-outlined text-sm">content_copy</span></button>
+</div>
+<pre class="bg-inverse-surface text-on-error p-4 overflow-x-auto font-code text-code leading-relaxed"><code>public GatewayResponse routePayment(PaymentRequest req) {
+    if (circuitBreaker.isOpen(req.getGatewayId())) {
+        log.warn("Gateway {} is down. Falling back to secondary.", req.getGatewayId());
+        return fallbackRouter.route(req);
+    }
+    return primaryRouter.route(req);
+}</code></pre>
+</div>
+</article>
+<div class="h-20"></div> <!-- Bottom padding for scrolling -->
+</div>
+</div>
+</main>
+<!-- Right Sidebar (AI Chat Panel) -->
+<aside class="w-[350px] h-full bg-surface-container-lowest border-l border-outline-variant flex flex-col flex-shrink-0 z-10 shadow-[-4px_0_15px_-3px_rgba(0,0,0,0.02)]">
+<!-- Chat Tabs -->
+<div class="flex border-b border-outline-variant bg-surface shrink-0">
+<button class="flex-1 py-3 text-center text-primary font-label-md text-label-md border-b-2 border-primary font-medium">
+                    对话
+                </button>
+<button class="flex-1 py-3 text-center text-on-surface-variant font-label-md text-label-md hover:text-on-surface transition-colors">
+                    轨迹
+                </button>
+</div>
+<!-- Chat History Area -->
+<div class="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-6 flex flex-col">
+<!-- System Status / Initial Context -->
+<div class="flex justify-center mb-2">
+<span class="px-3 py-1 bg-surface-container rounded-full text-[11px] font-medium text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">link</span>
+                        Context linked: Q2 Payment System PRD
+                    </span>
+</div>
+<!-- User Message -->
+<div class="flex flex-col items-end">
+<div class="bg-surface-container px-4 py-3 rounded-2xl rounded-tr-sm max-w-[85%] text-on-surface font-body-md text-body-md border border-outline-variant/50">
+                        详细解释一下支付网关的容灾逻辑？
+                    </div>
+</div>
+<!-- AI Status / Thinking Indicator -->
+<div class="flex flex-col items-start">
+<div class="flex items-center gap-2 text-on-surface-variant font-label-sm text-label-sm mb-2 px-1">
+<span class="material-symbols-outlined text-sm animate-spin">sync</span>
+                        🧠 正在分析需求...
+                    </div>
+</div>
+<!-- AI Response Card -->
+<div class="flex flex-col items-start w-full">
+<div class="bg-white border border-outline-variant px-4 py-4 rounded-2xl rounded-tl-sm w-[95%] shadow-sm relative">
+<!-- AI Avatar overlay -->
+<div class="absolute -left-3 -top-3 w-8 h-8 rounded-full bg-primary-container flex items-center justify-center text-on-primary border-2 border-white shadow-sm overflow-hidden">
+<img alt="AI Assistant Avatar" class="w-full h-full object-cover" data-alt="A sleek, abstract digital visualization representing an artificial intelligence assistant. The image features soft glowing geometric patterns and data streams in deep indigo and subtle pastels against a clean, light-mode background. It conveys intelligence, technology, and precision without looking like a human face." src="https://lh3.googleusercontent.com/aida/ADBb0uivJC1yJVCxF5fYfUQuRNuxWAMYbV6X3bu1hqhlVHFa1vCzoUvne3EypW9bHqKkWyLEbW3A7BJYU6LnQ7HRqgRYjzAm31Hjlc6s47o6Gdrm5YJx21ZPYVb196ooQn9r0C-7yL8cTZ2nEtURH1Ji_YO3i7M99cB1A6eQpd8Cesdh02Zw16g6UhljuJ7eLHZ0AnaqVvjZIJHLywpXdhkUmEDXnBui-Lv0klCsSaKLTvmz-YWZN0z1kvQqOzwz2S2ftq5dnKb8H-tgTg"/>
+</div>
+<div class="text-on-surface font-body-md text-[14px] leading-relaxed space-y-3 mt-1">
+<p>基于当前 PRD 文档中的 <span class="bg-primary/10 text-primary px-1 rounded text-xs font-mono">2. 容灾架构设计</span> 章节，支付网关的容灾逻辑主要包含以下核心机制：</p>
+<ul class="space-y-2 list-none pl-1">
+<li class="flex items-start gap-2">
+<span class="material-symbols-outlined text-primary text-[18px] mt-0.5">check_circle</span>
+<span><strong>异地多活部署：</strong> 路由层在多个地理可用区部署，防范单机房故障。</span>
+</li>
+<li class="flex items-start gap-2">
+<span class="material-symbols-outlined text-primary text-[18px] mt-0.5">warning</span>
+<span><strong>动态健康检测与熔断：</strong> 实时监控下游网关（如 Stripe/Adyen）。当失败率阈值超过 <code class="bg-surface-container px-1 py-0.5 rounded text-[12px]">5%</code> 时，系统会自动触发熔断。</span>
+</li>
+<li class="flex items-start gap-2">
+<span class="material-symbols-outlined text-primary text-[18px] mt-0.5">alt_route</span>
+<span><strong>平滑降级切换：</strong> 熔断后，流量会无缝切换至备用通道（Secondary Gateway），确保核心交易不中断。</span>
+</li>
+</ul>
+<div class="mt-4 pt-3 border-t border-outline-variant/30 flex gap-2">
+<button class="px-3 py-1 bg-surface-container-low border border-outline-variant rounded-full text-[12px] font-medium text-on-surface-variant hover:bg-surface-container transition-colors">
+                                    展示代码示例
+                                </button>
+<button class="px-3 py-1 bg-surface-container-low border border-outline-variant rounded-full text-[12px] font-medium text-on-surface-variant hover:bg-surface-container transition-colors">
+                                    生成架构图
+                                </button>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Input Area -->
+<div class="p-4 bg-surface border-t border-outline-variant shrink-0">
+<div class="relative bg-surface-container-lowest border border-outline-variant rounded-xl focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 transition-all shadow-sm">
+<textarea class="w-full bg-transparent border-none focus:ring-0 resize-none p-3 max-h-32 text-body-md font-body-md text-on-surface placeholder:text-outline" placeholder="咨询 Kevin 或输入 / 唤起命令..." rows="2"></textarea>
+<div class="flex items-center justify-between px-3 pb-2 pt-1">
+<div class="flex items-center gap-1 text-on-surface-variant">
+<button class="p-1.5 hover:bg-surface-container rounded-lg transition-colors tooltip" title="Attach file">
+<span class="material-symbols-outlined text-[18px]">attach_file</span>
+</button>
+<button class="p-1.5 hover:bg-surface-container rounded-lg transition-colors tooltip" title="Mention context">
+<span class="material-symbols-outlined text-[18px]">alternate_email</span>
+</button>
+</div>
+<button class="w-8 h-8 rounded-lg bg-primary text-on-primary flex items-center justify-center hover:bg-primary-container transition-colors shadow-sm">
+<span class="material-symbols-outlined text-[18px]">arrow_upward</span>
+</button>
+</div>
+</div>
+<div class="text-center mt-2">
+<span class="text-[11px] text-on-surface-variant">AI generated content may be inaccurate</span>
+</div>
+</div>
+</aside>
+</div>
+</body></html>

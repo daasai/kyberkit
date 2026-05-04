@@ -26,7 +26,8 @@ import { ContentAccumulatorMiddleware } from '../agent/middleware/ContentAccumul
 import type { AgentLoopDeps, ReliabilityLayer } from '../agent/AgentLoop.js';
 import { WorkspaceRegistry } from './WorkspaceRegistry.js';
 import type { WorkspaceInstance } from './WorkspaceInstance.js';
-import { join } from 'path';
+import { join, resolve } from 'path';
+import { existsSync } from 'fs';
 import { SkillSuggestionRunner } from '../skills/SkillSuggestionRunner.js';
 import { WorkspaceGrowthStore } from '../observability/WorkspaceGrowthStore.js';
 import { ensureWorkspaceSeed, resolveWorkspacePaths } from './WorkspaceBootstrap.js';
@@ -52,6 +53,8 @@ import { DriftDetector } from '../scheduler/DriftDetector.js';
 import { RecurringScheduler } from '../scheduler/RecurringScheduler.js';
 import { TriggeredScheduler } from '../scheduler/TriggeredScheduler.js';
 import { ContractCommand } from '../commands/builtin/ContractCommand.js';
+import type { AgentProductDef } from '../types/agent-product.js';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 export class KyberRuntime {
   private bus!: TypedEventBus<KyberEvents>;
@@ -81,6 +84,8 @@ export class KyberRuntime {
   private recurringScheduler!: RecurringScheduler;
   private triggeredScheduler!: TriggeredScheduler;
   private driftDetector!: DriftDetector;
+  /** Loaded product-level agent definition (if configured). */
+  private agentDef?: AgentProductDef;
 
 
   /**
@@ -91,6 +96,7 @@ export class KyberRuntime {
   async bootstrap(): Promise<void> {
     // 1. Load config from environment variables
     this.config = await loadConfig();
+    this.agentDef = await this.loadAgentDef();
 
     // 2. Init event bus
     this.bus = new TypedEventBus<KyberEvents>();
@@ -105,11 +111,12 @@ export class KyberRuntime {
     });
 
     // 3. Build permission sandbox
+    const effectivePermissions = this.resolvePermissions();
     this.sandbox = new PermissionSandbox({
-      allowed: new Set(this.config.permissions.allowed as PermissionTag[]),
-      denied: new Set(this.config.permissions.denied as PermissionTag[]),
-      allowedPaths: this.config.permissions.allowedPaths,
-      allowedDomains: this.config.permissions.allowedDomains,
+      allowed: new Set(effectivePermissions.allowed as PermissionTag[]),
+      denied: new Set(effectivePermissions.denied as PermissionTag[]),
+      allowedPaths: effectivePermissions.allowedPaths,
+      allowedDomains: effectivePermissions.allowedDomains,
     });
 
     // 4. Init Model Provider
@@ -342,9 +349,9 @@ export class KyberRuntime {
    */
   createAgent(agentId: string = crypto.randomUUID()): DefaultAgentInstance {
     return new DefaultAgentInstance(agentId, {
-      name: this.config.agent?.name ?? 'default-agent',
+      name: this.agentDef?.name ?? this.config.agent?.name ?? 'default-agent',
       model: this.config.model.name,
-      systemPrompt: this.config.agent?.systemPrompt,
+      systemPrompt: this.agentDef?.platformDirective ?? this.config.agent?.systemPrompt,
       initialContext: []
     }, this.bus);
   }
@@ -539,6 +546,7 @@ export class KyberRuntime {
       promptAssembler: workspace.promptAssembler,
       commandRegistry: workspace.commandRegistry,
       workspace: workspace,
+      platformDirective: this.agentDef?.platformDirective,
       compactionGuard,
       memoryTrigger,
       turnTimeoutMs: this.config.agent.turnTimeoutMs,
@@ -556,6 +564,64 @@ export class KyberRuntime {
       outputGuardChecker: this.outputGuardChecker,
     };
 
+  }
+
+  private resolvePermissions(): {
+    allowed: readonly string[];
+    denied: readonly string[];
+    allowedPaths: readonly string[];
+    allowedDomains: readonly string[];
+  } {
+    const p = this.agentDef?.permissions;
+    return {
+      allowed: p?.allowed ?? this.config.permissions.allowed,
+      denied: p?.denied ?? this.config.permissions.denied,
+      allowedPaths: p?.allowedPaths ?? this.config.permissions.allowedPaths,
+      allowedDomains: p?.allowedDomains ?? this.config.permissions.allowedDomains,
+    };
+  }
+
+  private async loadAgentDef(): Promise<AgentProductDef | undefined> {
+    const defPath = process.env.KYBER_AGENT_DEF?.trim();
+    if (defPath) {
+      try {
+        const cwdPath = resolve(process.cwd(), defPath);
+        const repoPath = resolve(
+          fileURLToPath(new URL('../../', import.meta.url)),
+          defPath,
+        );
+        const absPath = existsSync(cwdPath) ? cwdPath : repoPath;
+        const mod = await import(pathToFileURL(absPath).href);
+        const loaded = (mod.default ?? mod.KEVIN_AGENT_DEF) as AgentProductDef | undefined;
+        if (!loaded || typeof loaded !== 'object') {
+          throw new ConfigError(`Agent definition export not found in ${defPath}`);
+        }
+        if (!loaded.name || !loaded.platformDirective) {
+          throw new ConfigError(
+            `Agent definition in ${defPath} must include non-empty "name" and "platformDirective"`,
+          );
+        }
+        return loaded;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new ConfigError(`Failed to load KYBER_AGENT_DEF (${defPath}): ${msg}`);
+      }
+    }
+
+    const fallbackDirective = this.config.agent?.systemPrompt?.trim();
+    if (!fallbackDirective) return undefined;
+
+    return {
+      id: this.config.agent?.name ?? 'default',
+      name: this.config.agent?.name ?? 'default-agent',
+      platformDirective: fallbackDirective,
+      permissions: {
+        allowed: this.config.permissions.allowed,
+        denied: this.config.permissions.denied,
+        allowedPaths: this.config.permissions.allowedPaths,
+        allowedDomains: this.config.permissions.allowedDomains,
+      },
+    };
   }
 }
 

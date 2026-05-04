@@ -1,12 +1,13 @@
-import { WorkspaceConfig } from '../types/workspace.js';
-import { ModelProvider } from '../types/model.js';
-import { AssetRegistry, DefaultAssetRegistry } from '../assets/AssetRegistry.js';
+import type { WorkspaceConfig } from '../types/workspace.js';
+import type { AssetRegistry } from '../assets/AssetRegistry.js';
+import { DefaultAssetRegistry } from '../assets/AssetRegistry.js';
 import { PromptAssembler } from '../prompt/PromptAssembler.js';
 import { CommandRegistry } from '../commands/CommandRegistry.js';
 import type { LongTermMemory } from '../memory/LongTermMemory.js';
 
 // Providers
 import { IdentityProvider } from '../prompt/providers/IdentityProvider.js';
+import { PlatformDirectiveProvider } from '../prompt/providers/PlatformDirectiveProvider.js';
 import { ToolSchemaProvider } from '../prompt/providers/ToolSchemaProvider.js';
 import { UserDirectiveProvider } from '../prompt/providers/UserDirectiveProvider.js';
 import { MemoryProvider } from '../prompt/providers/MemoryProvider.js';
@@ -54,6 +55,7 @@ export class WorkspaceInstance {
 
     // 2. Initialize Prompt Assembler with standard providers
     this.promptAssembler = new PromptAssembler()
+      .register(new PlatformDirectiveProvider())
       .register(new IdentityProvider(config.identityPrompt || 'Professional AI Assistant'))
       .register(new ToolSchemaProvider())
       .register(new ActiveSkillsProvider())
