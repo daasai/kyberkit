@@ -3,6 +3,8 @@
 更新时间：2026-05-03  
 适用范围：Kevin 1.0（并为 Peter/XX 等智能体预留统一架构）
 
+**实现态姊妹文档**：[kevin-system-design.md](kevin-system-design.md) — Kevin 1.0 当前进程拓扑、Sidecar API/SSE、持久化路径、Tauri 与 Sidecar 生命周期及环境变量（与本文「应然」架构互为补充）。
+
 ## 1. 目标与背景
 
 KyberKit 从 2.0 开始向多租户、多用户演进，`Workspace` 的核心职责是隔离用户私有资产（上下文、记忆、知识库、技能库）。  

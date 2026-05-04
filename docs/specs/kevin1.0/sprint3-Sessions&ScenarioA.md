@@ -3,6 +3,8 @@
 > **Sprint**: Sprint 3 — Sessions & Scenario A
 > **目标**: 完成多会话生命周期管理 + SQLite 持久化，让左侧面板和中间面板从静态 Mock 变为真实数据驱动；同时端到端打通 Scenario A（站会数据 → 产品升级 Spec）。
 > **前置条件**: Sprint 2 全部 5 个任务完成（含 Task 2.5 架构修复）
+>
+> **实现态与设计总览 (2026-05-04)**：多会话、SQLite、UI 数据流与 Tauri 侧说明见 [kevin-system-design.md](kevin-system-design.md)；任务完成度见 [sprint-plan-v2.md](sprint-plan-v2.md) §4；演示与打包见 [demo-and-packaging.md](demo-and-packaging.md)。
 
 ---
 

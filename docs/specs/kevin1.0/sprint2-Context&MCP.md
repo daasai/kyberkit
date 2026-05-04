@@ -5,6 +5,8 @@
 > **核心选型**: KyberKit `KyberRuntime` / `AgentSession` + 官方 `@modelcontextprotocol/server-filesystem`
 >
 > **⚠️ 修订说明 (2026-05-03)**: 根据 `agent-network-architecture.md` 的 Review，Task 2.4 需重新设计；同时增补 Task 2.5（修复架构偏差）。最新状态见各任务标注。
+>
+> **实现态与设计总览 (2026-05-04)**：Sidecar、SSE、Artifact 管道、环境变量与 Tauri 行为见 [kevin-system-design.md](kevin-system-design.md)；Filesystem MCP 验收步骤见 [mcp-filesystem-runbook.md](mcp-filesystem-runbook.md)；路线图见 [sprint-plan-v2.md](sprint-plan-v2.md)。
 
 ---
 
