@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "kyberkit-2.0.md",
+                "file": "specs/kevin1.5/kevin-v1.5-prd.draft-backup.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "kyberkit-2.0"
+              "title": "kevin-v1.5-prd.draft-backup"
             }
           }
         ]
@@ -156,13 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "kyberkit-2.0.md",
+                "file": "specs/kevin1.5/kevin-v1.5-prd.draft-backup.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "kyberkit-2.0 的大纲"
+              "title": "kevin-v1.5-prd.draft-backup 的大纲"
             }
           }
         ],
@@ -185,37 +185,42 @@
   },
   "active": "6cbffcedfbd905ec",
   "lastOpenFiles": [
-    "specs/3.0/capability-decomposition.md",
-    "specs/3.0/learning-loop-and-outputguard.md",
-    "specs/3.0/audit-and-outputguard.md",
-    "specs/3.0/policy-and-permission-gate.md",
-    "specs/3.0/task-permission-contract.md",
-    "specs/3.0/README.md",
+    "specs/kevin1.5/kevin-v1.5-prd.md",
+    "specs/kevin1.5/kevin-v1.5-prd.draft-backup.md",
+    "specs/kevin1.5/enterprise-ai-ui-research.md",
+    "specs/kevin1.5",
+    "README.md",
+    "Clippings/Anthropic 最新博客：Prompt Caching 是构建 Claude Code 的一切.md",
+    "specs/kevin1.0/feishu-mcp-roadmap.md",
+    "specs/kevin1.0/demo-and-packaging.md",
+    "specs/kevin1.0/mcp-filesystem-runbook.md",
+    "specs/kevin1.0/kevin-system-design.md",
+    "specs/kevin1.0/README.md",
+    "specs/kevin1.0/artifact-discovery-upgrade.md",
+    "specs/kevin1.0/sprint2-Context&MCP.md",
+    "specs/kevin1.0/sprint-plan-v2.md",
+    "specs/kevin1.0/sprint3-Sessions&ScenarioA.md",
+    "specs/2.0/v2-upgrade-plan.md",
+    "specs/3.0/Kyberkit3.0-product-strategy.md",
+    "specs/3.0/Kyberkit3.0-memo.md",
+    "specs/2.0/sprint5-design-spec.zh.md",
+    "specs/2.0/sprint4-design-spec.zh.md",
+    "specs/2.0/sprint3.5-design-spec.zh.md",
+    "specs/2.0/sprint3-design-spec.zh.md",
+    "specs/2.0/sprint2-design-spec.zh.md",
+    "specs/2.0/sprint1-design-spec.zh.md",
+    "specs/2.0/sprint1-design-spec.md",
+    "specs/1.0/split-spec.md",
+    "specs/1.0/product-experience-memo.md",
+    "specs/2.0",
+    "specs/1.0",
+    "specs/kevin1.0/poto/screen.png",
+    "specs/kevin1.0/poto/code.html",
+    "specs/kevin1.0/poto",
+    "specs/kevin1.0",
     "specs/3.0",
     "specs",
-    "manual/SUMMARY.md",
-    "manual/01-philosophy.md",
-    "Kyberkit3.0-product-strategy.md",
-    "hermes/agent-design-manual-ch01.md",
-    "Kyberkit3.0-memo.md",
-    "reviews/Kyberkit3.0-memo.md",
     "reviews/Kyberkit3.0-memo",
-    "track-b-implementation-notes.md",
-    "sprint5-design-spec.zh.md",
-    "decisions/0001-track-strategy-and-multitenancy-deferral.md",
-    "decisions",
-    "hermes/agent-design-manual-ch11-appendix.md",
-    "hermes/agent-design-manual-ch08-10.md",
-    "hermes/agent-design-manual-ch07.md",
-    "hermes/agent-design-manual-ch06.md",
-    "hermes/agent-design-manual-ch05.md",
-    "hermes/agent-design-manual-outline.md",
-    "hermes/agent-design-manual-ch04.md",
-    "hermes/agent-design-manual-ch02.md",
-    "hermes/agent-design-manual-ch03.md",
-    "Clippings/Hermes Agent 架构全解：自进化单体智能体的学习循环与四层内存设计-腾讯云开发者社区-腾讯云.md",
-    "deepcc/09-tool-execution-engine-deep-dive.md",
-    "Clippings",
-    "reviews"
+    "decisions"
   ]
 }
