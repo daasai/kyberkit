@@ -8,6 +8,7 @@
 
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { SIDECAR_URL } from '../config/sidecarUrl'
+import { openAndFocusSpace, type SpaceSwitchOutcome } from '../lib/tauriSpace'
 
 export interface SessionMeta {
   id: string
@@ -24,6 +25,7 @@ interface SessionContextType {
   createSession: () => Promise<string>
   deleteSession: (id: string) => Promise<void>
   refreshSessions: () => Promise<void>
+  switchToSessionSpace: (id: string) => Promise<SpaceSwitchOutcome>
 }
 
 const SessionContext = createContext<SessionContextType | null>(null)
@@ -70,6 +72,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  const switchToSessionSpace = useCallback(async (id: string): Promise<SpaceSwitchOutcome> => {
+    const current = activeSessionIdRef.current
+    if (current === id) return 'noop'
+    const ok = await openAndFocusSpace(id)
+    return ok ? 'focused' : 'failed'
+  }, [])
+
+  // Deep link: ?space=<sessionId> (e.g. second window from A1 switch)
+  useEffect(() => {
+    try {
+      const sid = new URLSearchParams(window.location.search).get('space')
+      if (sid) {
+        setActiveSessionId(sid)
+        activeSessionIdRef.current = sid
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   // Poll sessions periodically so the sidebar stays fresh
   useEffect(() => {
     void refreshSessions()
@@ -87,6 +109,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       createSession,
       deleteSession,
       refreshSessions,
+      switchToSessionSpace,
     }}>
       {children}
     </SessionContext.Provider>

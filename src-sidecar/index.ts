@@ -17,6 +17,10 @@ import { SessionManager } from './SessionManager.js'
 import { ArtifactParser } from './ArtifactParser.js'
 import { summarizeArtifactMarkdown } from './artifactSummary.js'
 import { dbListChatMessages, dbPersistChatTurn } from './db.js'
+import {
+  attachSkillSuggestedRuntimeBridge,
+  createSpaceEventBroadcaster,
+} from './spaceEventBroadcast.js'
 
 /** Optional dotenv-style file (Tauri sets `KYBERKIT_ENV_FILE` in release). Does not override existing env. */
 async function applyKevinEnvFile(): Promise<void> {
@@ -64,6 +68,8 @@ function json(data: unknown, status = 200): Response {
 console.log('[Kevin Sidecar] Bootstrapping KyberKit Runtime...')
 const runtime = new KyberRuntime()
 await runtime.bootstrap()
+const spaceEventBroadcaster = createSpaceEventBroadcaster()
+attachSkillSuggestedRuntimeBridge(runtime.getBus(), spaceEventBroadcaster)
 
 const manager = new SessionManager(runtime)
 console.log('[Kevin Sidecar] SessionManager ready.')
@@ -187,6 +193,9 @@ Bun.serve({
               // Client disconnected
             }
           }
+          const unsubscribeSpaceEvents = spaceEventBroadcaster.subscribe((event) => {
+            emit(event)
+          })
 
           try {
             for await (const event of session.send(userMessage)) {
@@ -284,6 +293,7 @@ Bun.serve({
             console.error(`[Sidecar] Stream error [${sessionId.slice(0, 8)}]:`, msg)
             emit({ type: 'error', error: { message: msg } })
           } finally {
+            unsubscribeSpaceEvents()
             if (userMessage.trim()) {
               try {
                 dbPersistChatTurn(sessionId, userMessage, assistantPlain)

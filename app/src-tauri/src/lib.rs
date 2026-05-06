@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::path::BaseDirectory;
-use tauri::{App, Manager, RunEvent};
+use tauri::{App, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 /// Bun / native Sidecar child (if we started it).
 pub struct SidecarProcess(pub Mutex<Option<Child>>);
@@ -276,6 +276,41 @@ fn maybe_start_sidecar(app: &mut App) -> Result<(), String> {
   }
 }
 
+/// Open a dedicated window for another session/space (A1). Dev uses Vite URL; release uses app index + query.
+#[tauri::command]
+fn open_and_focus_space_window(app: tauri::AppHandle, target_space_id: String) -> Result<(), String> {
+  let label = format!(
+    "space-{}",
+    std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|d| d.as_millis())
+      .unwrap_or(0)
+  );
+
+  let url: WebviewUrl = if cfg!(debug_assertions) {
+    let raw = format!("http://127.0.0.1:5173/?space={}", target_space_id);
+    WebviewUrl::External(
+      raw
+        .parse::<url::Url>()
+        .map_err(|e| e.to_string())?,
+    )
+  } else {
+    let path = format!("index.html?space={}", target_space_id);
+    WebviewUrl::App(path.into())
+  };
+
+  if let Some(w) = app.get_webview_window(&label) {
+    w.set_focus().map_err(|e| e.to_string())?;
+    return Ok(());
+  }
+
+  WebviewWindowBuilder::new(&app, &label, url)
+    .title("Kevin")
+    .build()
+    .map_err(|e| e.to_string())?;
+  Ok(())
+}
+
 fn stop_sidecar(app_handle: &tauri::AppHandle) {
   let Some(state) = app_handle.try_state::<SidecarProcess>() else {
     return;
@@ -294,6 +329,7 @@ fn stop_sidecar(app_handle: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .invoke_handler(tauri::generate_handler![open_and_focus_space_window])
     .setup(|app| {
       app
         .handle()

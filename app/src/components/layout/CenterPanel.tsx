@@ -12,17 +12,19 @@ import { SIDECAR_URL } from '../../config/sidecarUrl'
 
 const WELCOME_MARKDOWN = `# 欢迎使用 Kevin
 
-在右侧选择一个**快速启动**场景，或直接向 Kevin 提问。
+在右侧输入任务，或使用 **快速启动** 里的示例模板（仅为演示，不代表预装 Skill）。
 
-Kevin 生成的文档将显示在这里。
+主产物与文档编辑在**中栏画布**；右侧为对话与过程追踪。
 
 ---
 
-**使用建议：**
+**如何开始**
 
-- 📊 **站会数据** — 自动生成昨日业务数据卡片
-- 📋 **产品 Spec** — 基于数据模板起草功能升级方案  
-- 🔍 **RCA 分析** — 快速生成异常排查报告框架
+- 用 \`@\` 引用文档库中的路径（见左侧「文档库」）
+- 在输入区附加说明或粘贴上下文
+- 输入 \`/\` 可唤起已安装的 Skill（若已配置）
+
+示例模板与文案均为产品演示，**不表示**系统预装对应能力。
 `
 
 function MilkdownEditor({ content, streaming }: { content: string; streaming: boolean }) {
@@ -279,7 +281,11 @@ export function CenterPanel() {
       </div>
 
       {/* Scrollable Canvas */}
-      <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '40px 48px' }}>
+      <div
+        className="custom-scrollbar"
+        data-testid="artifact-primary-view"
+        style={{ flex: 1, overflowY: 'auto', padding: '40px 48px' }}
+      >
         <div id="kevin-center-canvas-anchor" ref={canvasAnchorRef} style={{ maxWidth: '800px', margin: '0 auto' }}>
           <MilkdownProvider key={activeSessionId ?? 'welcome'}>
             <MilkdownEditor content={displayContent} streaming={isStreaming} />

@@ -29,6 +29,14 @@ type SessionArtifactEntry = {
   content: string
 }
 
+type IslandEvent =
+  | { type: 'task.started'; taskName?: string; eta?: string }
+  | { type: 'task.progress'; taskName?: string; eta?: string }
+  | { type: 'task.awaiting_signoff'; pendingCount?: number }
+  | { type: 'task.completed'; summary?: string }
+
+const ISLAND_EVENT_NAME = 'kevin:island-event'
+
 export function RightPanel() {
   const { activeSessionId, createSession, refreshSessions } = useSession()
   const { onArtifactStart, onArtifactDelta, onArtifactEnd, loadArtifact, artifact } = useArtifact()
@@ -39,12 +47,14 @@ export function RightPanel() {
   const [sendHint, setSendHint] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'chat' | 'quick'>('chat')
   const [artifactsBySession, setArtifactsBySession] = useState<Record<string, SessionArtifactEntry[]>>({})
-  const [artifactsRailCollapsed, setArtifactsRailCollapsed] = useState(false)
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   /** When true, skip hydrating chat from Sidecar (avoids wiping optimistic rows right after createSession). */
   const streamingRef = useRef(false)
   const artifactDraftRef = useRef('')
+
+  const emitIslandEvent = useCallback((detail: IslandEvent) => {
+    window.dispatchEvent(new CustomEvent<IslandEvent>(ISLAND_EVENT_NAME, { detail }))
+  }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -106,22 +116,12 @@ export function RightPanel() {
     }
   }, [activeSessionId])
 
-  const openArtifactInCenter = useCallback(
-    (sessionId: string, content: string, artifactKey: string) => {
-      loadArtifact(sessionId, content)
-      setSelectedArtifactId(artifactKey)
-      requestFocusKevinCenter()
-    },
-    [loadArtifact],
-  )
-
   const openStripInCenter = useCallback(
     (sessionId: string, strip: ArtifactStrip) => {
       const body =
         strip.content ??
         (artifact.sessionId === sessionId && artifact.streaming ? artifact.content : '')
       if (body) loadArtifact(sessionId, body)
-      setSelectedArtifactId(strip.id)
       requestFocusKevinCenter()
     },
     [artifact.sessionId, artifact.streaming, artifact.content, loadArtifact],
@@ -137,6 +137,7 @@ export function RightPanel() {
     }
 
     streamingRef.current = true
+    emitIslandEvent({ type: 'task.started', taskName: 'Processing request' })
     setActiveTab('chat')
     setSendHint(null)
     setMessages(prev => [...prev, { role: 'user', content: trimmed }, { role: 'ai', content: '' }])
@@ -189,6 +190,7 @@ export function RightPanel() {
             if (event.type === 'artifact_delta' && typeof event.text === 'string') {
               artifactDraftRef.current += event.text
               onArtifactDelta(event.text)
+              emitIslandEvent({ type: 'task.progress', taskName: 'Streaming artifact' })
               continue
             }
 
@@ -218,6 +220,7 @@ export function RightPanel() {
               const summary =
                 typeof event.summary === 'string' ? event.summary : summarizeArtifactMarkdown(snap)
               onArtifactEnd()
+              emitIslandEvent({ type: 'task.completed', summary: summary || 'Artifact ready' })
               refreshSessions()
               setArtifactsBySession(prev => {
                 const list = prev[sid] ?? []
@@ -260,6 +263,8 @@ export function RightPanel() {
               } else if (event.type === 'status' && event.status === 'failed') {
                 const calls = last.toolCalls ?? []
                 last.toolCalls = [...calls, { label: `系统异常: ${String((event as { message?: string }).message)}`, icon: 'warning' }]
+              } else if (event.type === 'status' && event.status === 'awaiting_signoff') {
+                emitIslandEvent({ type: 'task.awaiting_signoff', pendingCount: 1 })
               }
 
               updated[updated.length - 1] = last
@@ -285,12 +290,15 @@ export function RightPanel() {
     } finally {
       streamingRef.current = false
       setIsStreaming(false)
+      emitIslandEvent({ type: 'task.completed', summary: 'Task completed' })
     }
-  }, [activeSessionId, isStreaming, createSession, onArtifactStart, onArtifactDelta, onArtifactEnd, refreshSessions])
+  }, [activeSessionId, isStreaming, createSession, onArtifactStart, onArtifactDelta, onArtifactEnd, refreshSessions, emitIslandEvent])
 
   const handleSend = () => sendMessage(input)
 
   const sessionArtifactList = activeSessionId ? (artifactsBySession[activeSessionId] ?? []) : []
+  const lastAi = [...messages].reverse().find((m) => m.role === 'ai')
+  const processToolCalls = lastAi?.toolCalls ?? []
 
   return (
     <div style={{
@@ -333,7 +341,7 @@ export function RightPanel() {
       {activeTab === 'quick' && (
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <p style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)', margin: '0 0 4px' }}>
-            选择一个场景，Kevin 会自动执行完整流程并在画布区生成产物。
+            以下为示例任务模板，不代表预装 Skill。发送后 Kevin 会在中栏画布生成产物。
           </p>
           {QUICK_TEMPLATES.map(t => (
             <button
@@ -365,95 +373,80 @@ export function RightPanel() {
       {/* Chat tab */}
       {activeTab === 'chat' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div style={{
-            flexShrink: 0,
-            padding: '10px 12px 12px',
-            borderBottom: '1px solid var(--color-outline-variant)',
-            background: 'var(--color-surface)',
-          }}>
-            <button
-              type="button"
-              onClick={() => setArtifactsRailCollapsed(c => !c)}
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '8px 10px',
-                borderRadius: '8px',
-                border: '1px solid var(--color-outline-variant)',
-                background: 'var(--color-surface-container-lowest)',
-                cursor: 'pointer',
-                fontSize: '13px',
-                fontWeight: 600,
-                color: 'var(--color-on-surface)',
-              }}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px', color: 'var(--color-primary)' }}>inventory_2</span>
-              制品
-              <span style={{
-                marginLeft: '4px',
-                fontSize: '11px',
-                fontWeight: 500,
-                color: 'var(--color-on-surface-variant)',
-                background: 'var(--color-surface-container)',
-                padding: '2px 8px',
-                borderRadius: '999px',
-              }}>
-                {sessionArtifactList.length}
-              </span>
-              <span className="material-symbols-outlined" style={{ fontSize: '20px', marginLeft: 'auto', color: 'var(--color-on-surface-variant)' }}>
-                {artifactsRailCollapsed ? 'expand_more' : 'expand_less'}
-              </span>
-            </button>
-            {!artifactsRailCollapsed && (
-              <div className="custom-scrollbar" style={{ marginTop: '10px', maxHeight: '168px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {!activeSessionId && (
-                  <p style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)', margin: 0 }}>
-                    创建或选择会话后，此处列出本轮及历史制品。
-                  </p>
-                )}
-                {activeSessionId && sessionArtifactList.length === 0 && (
-                  <p style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)', margin: 0 }}>
-                    暂无制品；带 &lt;artifact&gt; 的回复完成后会出现在这里。
-                  </p>
-                )}
-                {sessionArtifactList.map(entry => {
-                  const selected = selectedArtifactId === entry.id
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      onClick={() => activeSessionId && openArtifactInCenter(activeSessionId, entry.content, entry.id)}
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'stretch',
-                        gap: '4px',
-                        textAlign: 'left',
-                        padding: '10px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--color-outline-variant)',
-                        borderLeft: selected ? '3px solid var(--color-primary)' : '1px solid var(--color-outline-variant)',
-                        background: selected ? 'color-mix(in srgb, var(--color-primary) 6%, var(--color-surface))' : 'var(--color-surface-container-lowest)',
-                        cursor: 'pointer',
-                        transition: 'background 150ms',
-                      }}
-                    >
-                      <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                        {new Date(entry.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-on-surface)', lineHeight: 1.35 }}>
-                        {entry.summary}
-                      </span>
-                      <span style={{ fontSize: '11px', color: 'var(--color-primary)', fontWeight: 500 }}>
-                        打开画布 →
-                      </span>
-                    </button>
-                  )
-                })}
+          <div
+            data-testid="process-tracker"
+            style={{
+              flexShrink: 0,
+              padding: '10px 12px 12px',
+              borderBottom: '1px solid var(--color-outline-variant)',
+              background: 'var(--color-surface)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-on-surface)' }}>过程追踪</div>
+            <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+              {isStreaming ? '执行中…' : '空闲'}
+            </div>
+            {processToolCalls.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '120px', overflowY: 'auto' }}>
+                {processToolCalls.map((t, idx) => (
+                  <div
+                    key={`${t.label}-${idx}`}
+                    style={{
+                      fontSize: '11px',
+                      color: 'var(--color-on-surface-variant)',
+                      background: 'var(--color-surface-container-lowest)',
+                      padding: '4px 8px',
+                      borderRadius: '6px',
+                    }}
+                  >
+                    {t.icon === 'build' ? `工具: ${t.label}` : t.label}
+                  </div>
+                ))}
               </div>
             )}
+            {sessionArtifactList.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                  中栏画布已有 {sessionArtifactList.length} 项产物（主视图在中栏）
+                </span>
+                <button
+                  type="button"
+                  onClick={() => requestFocusKevinCenter()}
+                  style={{
+                    flexShrink: 0,
+                    padding: '4px 10px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderRadius: '6px',
+                    border: '1px solid var(--color-outline-variant)',
+                    background: 'var(--color-surface-container-lowest)',
+                    cursor: 'pointer',
+                    color: 'var(--color-primary)',
+                  }}
+                >
+                  聚焦中栏
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div
+            data-testid="context-attribution"
+            style={{
+              flexShrink: 0,
+              padding: '8px 12px',
+              borderBottom: '1px solid var(--color-outline-variant)',
+              background: 'var(--color-surface-container-lowest)',
+              fontSize: '11px',
+              color: 'var(--color-on-surface-variant)',
+            }}
+          >
+            <span style={{ fontWeight: 600, color: 'var(--color-on-surface)' }}>上下文</span>
+            {' · '}
+            {activeSessionId ? `会话 ${activeSessionId.slice(0, 8)}…` : '未选择会话'}
           </div>
 
           <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '20px', minHeight: 0 }}>

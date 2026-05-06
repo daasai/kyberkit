@@ -1,4 +1,26 @@
+import { useEffect, useState } from 'react'
+import { DynamicIsland } from './DynamicIsland'
+import {
+  useDynamicIslandState,
+  type IslandEvent,
+} from '../../hooks/useDynamicIslandState'
+
+const ISLAND_EVENT_NAME = 'kevin:island-event'
+
 export function AppHeader() {
+  const [events, setEvents] = useState<IslandEvent[]>([])
+  const islandState = useDynamicIslandState(events)
+
+  useEffect(() => {
+    const listener = (evt: Event) => {
+      const detail = (evt as CustomEvent<IslandEvent>).detail
+      if (!detail) return
+      setEvents((prev) => [...prev.slice(-5), detail])
+    }
+    window.addEventListener(ISLAND_EVENT_NAME, listener)
+    return () => window.removeEventListener(ISLAND_EVENT_NAME, listener)
+  }, [])
+
   return (
     <header
       style={{
@@ -52,6 +74,8 @@ export function AppHeader() {
           })}
         </nav>
       </div>
+
+      <DynamicIsland state={islandState} />
 
       {/* Right: Actions */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

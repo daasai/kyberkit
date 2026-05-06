@@ -7,7 +7,7 @@
     "kyberkit": "bin/kyberkit"
   },
   "scripts": {
-    "test": "bun test",
+    "test": "bun test ./src ./src-sidecar && npm run test:vitest --prefix app",
     "test:live:sprint2": "KYBER_RUN_LIVE_TESTS=true bun test src/runtime/Sprint2Live.integration.test.ts",
     "demo:sprint2": "bun run scripts/sprint2-workspace-demo.ts",
     "repl-test": "bun run scripts/repl-test.ts",
@@ -45,7 +45,6 @@
     "@types/react": "^19.2.14",
     "bun-types": "latest",
     "ink-testing-library": "^4.0.0",
-    "typescript": "^5.0.0",
-    "vitest": "^4.1.2"
+    "typescript": "^5.0.0"
   }
 }
