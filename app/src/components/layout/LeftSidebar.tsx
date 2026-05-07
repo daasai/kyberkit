@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
+import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
 import type { SpaceSwitchOutcome } from '../../lib/tauriSpace'
 
 type HandleSpaceSelectionArgs = {
@@ -49,17 +50,66 @@ function relativeTime(iso: string): string {
   return `${Math.floor(hrs / 24)}天前`
 }
 
-export function LeftSidebar() {
-  const { sessions, activeSessionId, createSession, deleteSession, switchToSessionSpace } = useSession()
+const FALLBACK_CONNECTORS: Connector[] = [
+  { name: 'Filesystem MCP', status: 'healthy', lastSuccess: '刚刚' },
+  { name: '系统监控 MCP',   status: 'healthy', lastSuccess: '2分钟前' },
+  { name: '贝易转 DW',      status: 'error',   lastSuccess: '20分钟前' },
+]
+
+export function LeftSidebar({
+  onOpenSkillStore,
+  onOpenAutomation,
+  onOpenSearch,
+}: {
+  onOpenSkillStore?: () => void
+  onOpenAutomation?: () => void
+  onOpenSearch?: () => void
+} = {}) {
+  const { sessions, activeSessionId, createSession, deleteSession, switchToSessionSpace, spaceId } = useSession()
   const { clearArtifact } = useArtifact()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [spaceMenuOpen, setSpaceMenuOpen] = useState(false)
   const spaceMenuRef = useRef<HTMLDivElement>(null)
-  const connectors = sortConnectors([
-    { name: 'Filesystem MCP', status: 'healthy', lastSuccess: '刚刚' },
-    { name: '系统监控 MCP', status: 'healthy', lastSuccess: '2分钟前' },
-    { name: '贝易转 DW', status: 'error', lastSuccess: '20分钟前' },
-  ])
+  const [pendingSignoffSessionIds, setPendingSignoffSessionIds] = useState<Set<string>>(new Set())
+  const [rawConnectors, setRawConnectors] = useState<Connector[]>(FALLBACK_CONNECTORS)
+  const connectors = sortConnectors(rawConnectors)
+
+  // Dynamic connector fetch with fallback
+  useEffect(() => {
+    fetch(`${SIDECAR_URL}/connectors`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then((data: Connector[]) => {
+        if (Array.isArray(data) && data.length > 0) setRawConnectors(data)
+      })
+      .catch(() => { /* fallback stays */ })
+  }, [])
+
+  // Pending sign-off polling — scoped to current space
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const res = await fetch(`${SIDECAR_URL}/tasks${qsSpace(spaceId)}`)
+        if (!res.ok || cancelled) return
+        const rows = (await res.json()) as Array<{ state: string; payload?: unknown }>
+        const awaiting = rows.filter((r) => r.state === 'awaiting-signoff')
+        const ids = new Set(
+          awaiting.map((r) => {
+            try {
+              const obj = JSON.parse(String(r.payload ?? '')) as { session_id?: string; sessionId?: string }
+              return obj.session_id ?? obj.sessionId ?? null
+            } catch { return null }
+          }).filter((id): id is string => Boolean(id))
+        )
+        if (!cancelled) setPendingSignoffSessionIds(ids)
+      } catch {
+        if (!cancelled) setPendingSignoffSessionIds(new Set())
+      }
+    }
+    void tick()
+    const timer = window.setInterval(tick, 4000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [spaceId])
 
   const handleSelectSession = async (id: string) => {
     await handleSpaceSelection({
@@ -121,9 +171,9 @@ export function LeftSidebar() {
         <nav style={{ marginBottom: '20px' }}>
           {[
             { icon: 'add', label: '新建会话', action: handleNew },
-            { icon: 'search', label: '搜索', action: () => {} },
-            { icon: 'extension', label: '插件', action: () => {} },
-            { icon: 'smart_toy', label: '自动化', action: () => {} },
+            { icon: 'search',    label: '搜索',       action: () => onOpenSearch?.() },
+            { icon: 'extension', label: 'Skill Store', action: () => onOpenSkillStore?.() },
+            { icon: 'smart_toy', label: '自动化',     action: () => onOpenAutomation?.() },
           ].map(({ icon, label, action }) => (
             <button key={label} onClick={action} style={{
               display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
@@ -230,6 +280,7 @@ export function LeftSidebar() {
           ) : (
             sessions.map(({ id, title, updatedAt }) => {
               const isActive = id === activeSessionId
+              const hasPendingSignoff = pendingSignoffSessionIds.has(id)
               return (
                 <div
                   key={id}
@@ -257,7 +308,12 @@ export function LeftSidebar() {
                   )}
                   <span className="material-symbols-outlined" style={{ fontSize: '15px', color: isActive ? 'var(--color-primary)' : 'inherit', flexShrink: 0 }}>description</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' }}>{title}</div>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' }}>
+                      {title}
+                      {hasPendingSignoff && (
+                        <span title="该会话有待签批任务" style={{ color: 'var(--color-error)', marginLeft: '6px', fontSize: '10px' }}>●</span>
+                      )}
+                    </div>
                     <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: '1px' }}>{relativeTime(updatedAt)}</div>
                   </div>
                   {/* Delete button (shown on hover) */}
