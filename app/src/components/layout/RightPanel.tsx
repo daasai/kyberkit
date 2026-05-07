@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
-import { SIDECAR_URL } from '../../config/sidecarUrl'
+import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
 import { summarizeArtifactMarkdown } from '../../lib/artifactSummary'
 import { requestFocusKevinCenter } from '../../lib/focusCenter'
 import { QUICK_TEMPLATES } from '../../data/templates'
@@ -38,7 +38,7 @@ type IslandEvent =
 const ISLAND_EVENT_NAME = 'kevin:island-event'
 
 export function RightPanel() {
-  const { activeSessionId, createSession, refreshSessions } = useSession()
+  const { activeSessionId, createSession, refreshSessions, spaceId } = useSession()
   const { onArtifactStart, onArtifactDelta, onArtifactEnd, loadArtifact, artifact } = useArtifact()
 
   const [messages, setMessages] = useState<Message[]>([])
@@ -60,6 +60,14 @@ export function RightPanel() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Space switch must not leak old-space state across windows
+  useEffect(() => {
+    setMessages([])
+    setSendHint(null)
+    setArtifactsBySession({})
+    artifactDraftRef.current = ''
+  }, [spaceId])
+
   // Load persisted chat when the active session changes (keeps RightPanel in sync with LeftSidebar)
   useEffect(() => {
     let cancelled = false
@@ -70,7 +78,7 @@ export function RightPanel() {
       }
       if (streamingRef.current) return
       try {
-        const res = await fetch(`${SIDECAR_URL}/sessions/${activeSessionId}`)
+        const res = await fetch(`${SIDECAR_URL}/sessions/${activeSessionId}${qsSpace(spaceId)}`)
         if (!res.ok || cancelled) return
         const data = await res.json() as {
           messages?: Array<{ role: string; content: string }>
@@ -145,7 +153,7 @@ export function RightPanel() {
     setInput('')
 
     try {
-      const res = await fetch(`${SIDECAR_URL}/sessions/${sessionId}/messages`, {
+      const res = await fetch(`${SIDECAR_URL}/sessions/${sessionId}/messages${qsSpace(spaceId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: trimmed }),
