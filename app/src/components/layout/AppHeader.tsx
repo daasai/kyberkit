@@ -1,25 +1,21 @@
-import { useEffect, useState } from 'react'
+import { useRef, useState } from 'react'
 import { DynamicIsland } from './DynamicIsland'
-import {
-  useDynamicIslandState,
-  type IslandEvent,
-} from '../../hooks/useDynamicIslandState'
+import { AccountMenu } from './AccountMenu'
+import type { DynamicIslandState } from '../../hooks/useDynamicIslandState'
 
-const ISLAND_EVENT_NAME = 'kevin:island-event'
-
-export function AppHeader() {
-  const [events, setEvents] = useState<IslandEvent[]>([])
-  const islandState = useDynamicIslandState(events)
-
-  useEffect(() => {
-    const listener = (evt: Event) => {
-      const detail = (evt as CustomEvent<IslandEvent>).detail
-      if (!detail) return
-      setEvents((prev) => [...prev.slice(-5), detail])
-    }
-    window.addEventListener(ISLAND_EVENT_NAME, listener)
-    return () => window.removeEventListener(ISLAND_EVENT_NAME, listener)
-  }, [])
+export function AppHeader({
+  onOpenSettings,
+  onOpenNotifications,
+  islandState,
+  notifyBadge = false,
+}: {
+  onOpenSettings?: () => void
+  onOpenNotifications?: () => void
+  islandState: DynamicIslandState
+  notifyBadge?: boolean
+}) {
+  const [accountOpen, setAccountOpen] = useState(false)
+  const avatarRef = useRef<HTMLButtonElement>(null)
 
   return (
     <header
@@ -35,135 +31,65 @@ export function AppHeader() {
         zIndex: 40,
       }}
     >
-      {/* Left: Logo + Nav */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-        {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '15px', color: 'var(--color-on-surface)' }}>
-          <span className="material-symbols-outlined filled" style={{ color: 'var(--color-primary)', fontSize: '22px' }}>terminal</span>
-          Kevin
-        </div>
-
-        {/* Divider */}
-        <div style={{ width: '1px', height: '16px', backgroundColor: 'var(--color-outline-variant)' }} />
-
-        {/* Nav Tabs */}
-        <nav style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-          {['Drafts', 'Published', 'Reviews', 'Archive'].map((tab) => {
-            const isActive = tab === 'Published'
-            return (
-              <a
-                key={tab}
-                href="#"
-                style={{
-                  padding: '16px 12px',
-                  fontSize: '14px',
-                  fontWeight: 500,
-                  color: isActive ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
-                  textDecoration: 'none',
-                  borderBottom: isActive ? '2px solid var(--color-primary)' : '2px solid transparent',
-                  transition: 'color 150ms ease, border-color 150ms ease',
-                  display: 'flex',
-                  alignItems: 'center',
-                }}
-                onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = 'var(--color-primary)' }}
-                onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = 'var(--color-on-surface-variant)' }}
-              >
-                {tab}
-              </a>
-            )
-          })}
-        </nav>
+      {/* Left: Logo */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '15px', color: 'var(--color-on-surface)', minWidth: 0, flex: 1 }}>
+        <span className="material-symbols-outlined filled" style={{ color: 'var(--color-primary)', fontSize: '22px' }}>terminal</span>
+        Kevin
       </div>
 
+      {/* Center: DynamicIsland */}
       <DynamicIsland state={islandState} />
 
       {/* Right: Actions */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        {/* Icon Buttons */}
-        {['settings', 'notifications'].map((icon) => (
-          <button
-            key={icon}
-            style={{
-              padding: '8px',
-              background: 'transparent',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              color: 'var(--color-on-surface-variant)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              position: 'relative',
-              transition: 'background 150ms ease',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>{icon}</span>
-            {icon === 'notifications' && (
-              <span style={{
-                position: 'absolute', top: '8px', right: '8px',
-                width: '7px', height: '7px',
-                background: 'var(--color-error)',
-                borderRadius: '50%',
-              }} />
-            )}
-          </button>
-        ))}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        <button
+          type="button"
+          aria-label="通知"
+          onClick={() => onOpenNotifications?.()}
+          style={{ padding: '8px', background: 'transparent', border: 'none', borderRadius: '8px', cursor: 'pointer', color: 'var(--color-on-surface-variant)', position: 'relative' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>notifications</span>
+          {notifyBadge && (
+            <span style={{ position: 'absolute', top: '8px', right: '8px', width: '7px', height: '7px', background: 'var(--color-error)', borderRadius: '50%' }} />
+          )}
+        </button>
+
+        <button
+          type="button"
+          aria-label="设置"
+          onClick={() => onOpenSettings?.()}
+          style={{ padding: '8px', background: 'transparent', border: 'none', borderRadius: '8px', cursor: 'pointer', color: 'var(--color-on-surface-variant)' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>settings</span>
+        </button>
 
         <div style={{ width: '1px', height: '16px', backgroundColor: 'var(--color-outline-variant)', margin: '0 4px' }} />
 
-        {/* Export */}
-        <button style={{
-          padding: '6px 12px',
-          fontSize: '12px',
-          fontWeight: 600,
-          background: 'var(--color-surface-container-lowest)',
-          border: '1px solid var(--color-outline-variant)',
-          borderRadius: '8px',
-          color: 'var(--color-on-surface)',
-          cursor: 'pointer',
-          transition: 'background 150ms ease',
-        }}
-          onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'var(--color-surface-container-lowest)')}
+        {/* Avatar → AccountMenu */}
+        <button
+          ref={avatarRef}
+          type="button"
+          aria-label="账户"
+          onClick={() => setAccountOpen((v) => !v)}
+          style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--color-primary-container)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-on-primary)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}
         >
-          Export
+          K
         </button>
 
-        {/* Share */}
-        <button style={{
-          padding: '6px 12px',
-          fontSize: '12px',
-          fontWeight: 600,
-          background: 'var(--color-primary)',
-          border: 'none',
-          borderRadius: '8px',
-          color: 'var(--color-on-primary)',
-          cursor: 'pointer',
-          transition: 'background 150ms ease',
-        }}
-          onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-primary-container)')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'var(--color-primary)')}
-        >
-          Share
-        </button>
-
-        {/* Avatar */}
-        <div style={{
-          width: '32px', height: '32px',
-          borderRadius: '50%',
-          background: 'var(--color-primary-container)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: 'var(--color-on-primary)',
-          fontSize: '13px',
-          fontWeight: 600,
-          marginLeft: '4px',
-          overflow: 'hidden',
-          flexShrink: 0,
-        }}>
-          S
-        </div>
+        <AccountMenu
+          open={accountOpen}
+          onClose={() => setAccountOpen(false)}
+          anchorRef={avatarRef}
+          userName="Kevin 用户"
+          onResetConfig={() => {
+            localStorage.clear()
+            window.location.reload()
+          }}
+        />
       </div>
     </header>
   )
