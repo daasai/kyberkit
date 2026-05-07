@@ -143,7 +143,7 @@ RightPanel.emitIslandEvent(event)
 - 恢复 `onOpenSettings` / `onOpenNotifications` / `islandState` / `notifyBadge` props
 - 恢复通知、设置按钮 `onClick` handler
 - 头像 `<div>` 改为 `<button>`，接入 `<AccountMenu>`（W-04）
-- Export / Share：保留视觉占位，`type="button"` 不绑定业务逻辑
+- Export / Share：**整块移除**，不保留视觉占位
 
 ### 4.6 `app/src/components/layout/LeftSidebar.tsx`
 
@@ -219,7 +219,7 @@ Step 7: 全量冒烟测试       — 验收标准逐项核查
 
 ## 8. 超出范围
 
-- Export / Share 按钮的业务逻辑实现（v1.5 范围外）
+- Export / Share 按钮（已从 AppHeader 中移除，不在本次或后续 v1.5 范围内）
 - 连接器 sidecar 端点的实现（后端未规划）
 - 历史会话置顶/存档/折叠（已在前轮 UX 走查报告记录，下一 sprint）
 - 中右视觉重心优化（下一 sprint）
