@@ -7,8 +7,24 @@
  */
 
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
-import { SIDECAR_URL } from '../config/sidecarUrl'
+import { SIDECAR_URL, qsSpace } from '../config/sidecarUrl'
 import { openAndFocusSpace, type SpaceSwitchOutcome } from '../lib/tauriSpace'
+
+const SPACE_STORAGE_KEY = 'kevin:active-space-id'
+
+function readInitialSpaceId(): string {
+  try {
+    if (typeof window !== 'undefined') {
+      const q = new URLSearchParams(window.location.search).get('space_id')?.trim()
+      if (q) {
+        localStorage.setItem(SPACE_STORAGE_KEY, q)
+        return q
+      }
+      return localStorage.getItem(SPACE_STORAGE_KEY) || 'default'
+    }
+  } catch { /* ignore */ }
+  return 'default'
+}
 
 export interface SessionMeta {
   id: string
@@ -19,6 +35,8 @@ export interface SessionMeta {
 }
 
 interface SessionContextType {
+  spaceId: string
+  setSpaceId: (id: string) => void
   sessions: SessionMeta[]
   activeSessionId: string | null
   setActiveSessionId: (id: string) => void
@@ -31,15 +49,21 @@ interface SessionContextType {
 const SessionContext = createContext<SessionContextType | null>(null)
 
 export function SessionProvider({ children }: { children: ReactNode }) {
+  const [spaceId, setSpaceIdState] = useState<string>(readInitialSpaceId)
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   /** Always latest id for polling — avoids stale closure resetting selection every interval. */
   const activeSessionIdRef = useRef<string | null>(null)
   activeSessionIdRef.current = activeSessionId
 
+  const setSpaceId = useCallback((id: string) => {
+    try { localStorage.setItem(SPACE_STORAGE_KEY, id) } catch { /* ignore */ }
+    setSpaceIdState(id)
+  }, [])
+
   const refreshSessions = useCallback(async () => {
     try {
-      const res = await fetch(`${SIDECAR_URL}/sessions`)
+      const res = await fetch(`${SIDECAR_URL}/sessions${qsSpace(spaceId)}`)
       if (!res.ok) return
       const data: SessionMeta[] = await res.json()
       setSessions(data)
@@ -103,6 +127,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   return (
     <SessionContext.Provider value={{
+      spaceId,
+      setSpaceId,
       sessions,
       activeSessionId,
       setActiveSessionId,
