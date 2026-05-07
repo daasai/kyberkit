@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels'
 import { AppHeader } from './AppHeader'
 import { LeftSidebar } from './LeftSidebar'
 import { CenterPanel } from './CenterPanel'
 import { RightPanel } from './RightPanel'
+import { SkillStore } from '../skill-store/SkillStore'
+import { AutomationCenter } from '../automation/AutomationCenter'
+import { NotificationCenter } from '../notifications/NotificationCenter'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
 import { SIDECAR_URL } from '../../config/sidecarUrl'
+import { useDynamicIslandState, type IslandEvent } from '../../hooks/useDynamicIslandState'
 
 function ArtifactAutoLoader() {
   const { activeSessionId } = useSession()
@@ -85,8 +89,24 @@ function ResizeHandle() {
   )
 }
 
-export function AppShell() {
+export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {}) {
   const savedSizes = getSavedSizes()
+  const { spaceId } = useSession()
+  const [centerView, setCenterView] = useState<'editor' | 'skillstore' | 'automation'>('editor')
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [islandEvents, setIslandEvents] = useState<IslandEvent[]>([])
+  const islandState = useDynamicIslandState(islandEvents)
+
+  useEffect(() => {
+    const ISLAND_EVENT = 'kevin:island-event'
+    const listener = (evt: Event) => {
+      const detail = (evt as CustomEvent<IslandEvent>).detail
+      if (!detail) return
+      setIslandEvents((prev) => [...prev.slice(-5), detail])
+    }
+    window.addEventListener(ISLAND_EVENT, listener)
+    return () => window.removeEventListener(ISLAND_EVENT, listener)
+  }, [])
 
   const onLayout = useCallback((sizes: number[]) => {
     try {
@@ -97,7 +117,13 @@ export function AppShell() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       <ArtifactAutoLoader />
-      <AppHeader />
+      <AppHeader
+        onOpenSettings={onOpenSettings}
+        onOpenNotifications={() => setNotifOpen((v) => !v)}
+        islandState={islandState}
+        notifyBadge={islandState.mode === 'awaiting_signoff'}
+      />
+      <NotificationCenter open={notifOpen} onClose={() => setNotifOpen(false)} />
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', minHeight: 0 }}>
         <PanelGroup
           direction="horizontal"
@@ -106,7 +132,11 @@ export function AppShell() {
         >
           <Panel defaultSize={savedSizes[0]} minSize={15} maxSize={30}>
             <div style={{ height: '100%', overflow: 'hidden' }}>
-              <LeftSidebar />
+              <LeftSidebar
+                onOpenSkillStore={() => setCenterView('skillstore')}
+                onOpenAutomation={() => setCenterView('automation')}
+                onOpenSearch={() => setCenterView('editor')}
+              />
             </div>
           </Panel>
 
@@ -114,7 +144,9 @@ export function AppShell() {
 
           <Panel defaultSize={savedSizes[1]} minSize={35}>
             <div id="kevin-center-panel" style={{ height: '100%', overflow: 'hidden' }}>
-              <CenterPanel />
+              {centerView === 'editor' && <CenterPanel />}
+              {centerView === 'skillstore' && <SkillStore onBack={() => setCenterView('editor')} />}
+              {centerView === 'automation' && <AutomationCenter spaceId={spaceId} onBack={() => setCenterView('editor')} />}
             </div>
           </Panel>
 
