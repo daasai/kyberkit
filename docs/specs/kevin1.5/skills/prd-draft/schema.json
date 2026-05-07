@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "prd-draft-output",
+  "type": "object",
+  "required": ["title", "sections"],
+  "properties": {
+    "title": { "type": "string" },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["heading", "body"],
+        "properties": {
+          "heading": { "type": "string" },
+          "body": { "type": "string" }
+        }
+      }
+    },
+    "background_from_standup": { "type": "string" }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "weekly-report-output",
+  "type": "object",
+  "required": ["week_range", "okr_progress", "next_week_focus"],
+  "properties": {
+    "week_range": { "type": "string" },
+    "okr_progress": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kr", "target", "actual"],
+        "properties": {
+          "kr": { "type": "string" },
+          "target": { "type": "string" },
+          "actual": { "type": "string" },
+          "delta": { "type": "string" }
+        }
+      }
+    },
+    "attribution": { "type": "string" },
+    "next_week_focus": { "type": "string" }
+  }
+}
