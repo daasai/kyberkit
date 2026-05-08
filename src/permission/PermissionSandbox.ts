@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { PermissionGrant, PermissionTag, PermissionResult } from '../types/permission.js';
+import type { PermissionGrant, PermissionTag } from '../types/permission.js';
 
 export class PermissionSandbox {
   constructor(private readonly grant: PermissionGrant) {}
@@ -45,6 +45,11 @@ export class PermissionSandbox {
       // Ensure the target is inside the allowed path and not escaping
       return normalizedTarget.startsWith(normalizedAllowed);
     });
+  }
+
+  /** Introspection helper for UI/debug tooling. */
+  listAllowedPaths(): string[] {
+    return [...(this.grant.allowedPaths ?? [])];
   }
 
   /**

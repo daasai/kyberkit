@@ -28,5 +28,18 @@ describe('openAndFocusSpace', () => {
     expect(ok).toBe(true)
     expect(focus).toHaveBeenCalledTimes(1)
   })
+
+  it('invokes tauri command when tauri bridge exists', async () => {
+    const invoke = vi.fn(async () => undefined)
+    ;(globalThis as { window?: unknown }).window = {
+      __TAURI__: { core: { invoke } },
+      location: { href: 'http://localhost:5173/?space_id=space-a' },
+      open: vi.fn(),
+    }
+
+    const ok = await openAndFocusSpace('space-b')
+    expect(ok).toBe(true)
+    expect(invoke).toHaveBeenCalledWith('open_and_focus_space_window', { targetSpaceId: 'space-b' })
+  })
 })
 

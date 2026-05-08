@@ -419,7 +419,32 @@ export class KyberRuntime {
       const mem = reliability.memory as any;
       return typeof mem?.getLongTermMemory === 'function' ? mem.getLongTermMemory() : undefined;
     });
-    const deps = this.createAgentLoopDeps(agent, reliability, pipeline);
+    let deps = this.createAgentLoopDeps(agent, reliability, pipeline);
+    if (opts.agentExecution) {
+      const ctx = opts.agentExecution;
+      const absMount = resolve(ctx.libraryMountPath);
+      const absTech = resolve(ctx.libraryTechRoot);
+      const effectivePermissions = this.resolvePermissions();
+      const sessionSandbox = new PermissionSandbox({
+        allowed: new Set(effectivePermissions.allowed as PermissionTag[]),
+        denied: new Set(effectivePermissions.denied as PermissionTag[]),
+        // Kevin Rev3: per-session roots must follow current Library binding.
+        allowedPaths: [absMount, absTech],
+        allowedDomains: effectivePermissions.allowedDomains,
+      });
+      const facade = this.tools as DefaultToolIntegrationFacade;
+      const builtinsReg = new BuiltinToolRegistry(
+        createBuiltinTools(facade.shell, sessionSandbox, absMount),
+      );
+      const sessionTools = new DefaultToolIntegrationFacade(
+        facade.shell,
+        facade.mcp,
+        facade.skills,
+        builtinsReg,
+      );
+      // MCP stays process-global; per RS-10, do not claim MCP fs root tracks Library until a request-level MCP spike.
+      deps = { ...deps, tools: sessionTools, sandbox: sessionSandbox, executionCwd: absMount };
+    }
 
     const trajEnabled = this.config.telemetry.trajectory.enabled !== false;
     const trajectory =

@@ -244,6 +244,7 @@
 |------|----------|
 | 2026-05-08 | 初稿：整合 Rev3 + tier-architecture + 已知代码落差与阶段划分 |
 | 2026-05-08 | RevA：根据 Agent 框架评审补充 `AgentExecutionContext`、单 Runtime 并发约束、session 归属校验、MCP root 阶段边界与 P5 验收 |
+| 2026-05-08 | RevB：收口 `space_id` 前端漏传（`AppShell` 会话详情加载）、补齐 `AgentExecutionContext.allowedRoots/mcpRoots`，并在 `/health` 显式声明 `mcpRootMode=deferred`（RS-10）。 |
 
 ---
 

@@ -8,6 +8,7 @@
 
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { SIDECAR_URL, qsSpace } from '../config/sidecarUrl'
+import { isUuidString } from '../lib/isUuid'
 import { openAndFocusSpace, type SpaceSwitchOutcome } from '../lib/tauriSpace'
 
 const SPACE_STORAGE_KEY = 'kevin:active-space-id'
@@ -15,20 +16,34 @@ const SPACE_STORAGE_KEY = 'kevin:active-space-id'
 export interface SpaceMeta {
   id: string
   label: string
+  libraryId?: string
+  mountPath?: string
+}
+
+function syncUrlSpaceId(spaceId: string): void {
+  if (typeof window === 'undefined' || !spaceId) return
+  try {
+    const u = new URL(window.location.href)
+    u.searchParams.set('space_id', spaceId)
+    window.history.replaceState({}, '', u.toString())
+  } catch {
+    // ignore URL sync failures
+  }
 }
 
 function readInitialSpaceId(): string {
   try {
     if (typeof window !== 'undefined') {
       const q = new URLSearchParams(window.location.search).get('space_id')?.trim()
-      if (q) {
+      if (q && isUuidString(q)) {
         localStorage.setItem(SPACE_STORAGE_KEY, q)
         return q
       }
-      return localStorage.getItem(SPACE_STORAGE_KEY) || 'default'
+      const stored = localStorage.getItem(SPACE_STORAGE_KEY)?.trim()
+      if (stored && isUuidString(stored)) return stored
     }
   } catch { /* ignore */ }
-  return 'default'
+  return ''
 }
 
 export interface SessionMeta {
@@ -44,6 +59,7 @@ interface SessionContextType {
   setSpaceId: (id: string) => void
   spaces: SpaceMeta[]
   refreshSpaces: () => Promise<void>
+  createSpaceLibrary: (mountPath: string, displayName?: string) => Promise<SpaceMeta>
   sessions: SessionMeta[]
   activeSessionId: string | null
   setActiveSessionId: (id: string) => void
@@ -67,10 +83,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const setSpaceId = useCallback((id: string) => {
     try { localStorage.setItem(SPACE_STORAGE_KEY, id) } catch { /* ignore */ }
+    // Prevent stale session id from leaking across spaces.
+    setActiveSessionId(null)
+    setSessions([])
+    syncUrlSpaceId(id)
     setSpaceIdState(id)
   }, [])
 
   const refreshSessions = useCallback(async () => {
+    if (!spaceId) return
     try {
       const res = await fetch(`${SIDECAR_URL}/sessions${qsSpace(spaceId)}`)
       if (!res.ok) return
@@ -90,21 +111,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch(`${SIDECAR_URL}/spaces`)
       if (!res.ok) {
-        setSpaces([{ id: 'default', label: '默认 Space' }])
+        setSpaces([])
         return
       }
-      const data = (await res.json()) as SpaceMeta[]
-      const next =
-        Array.isArray(data) && data.length > 0
-          ? data
-          : [{ id: 'default', label: '默认 Space' }]
+      const data = (await res.json()) as Array<{
+        id?: string
+        label?: string
+        libraryId?: string
+        mountPath?: string
+      }>
+      const next = Array.isArray(data)
+        ? data
+            .filter((row) => typeof row?.id === 'string' && row.id.trim().length > 0)
+            .map((row) => ({
+              id: String(row.id).trim(),
+              label: typeof row.label === 'string' && row.label.trim() ? row.label.trim() : String(row.id).trim(),
+              libraryId: typeof row.libraryId === 'string' ? row.libraryId : undefined,
+              mountPath: typeof row.mountPath === 'string' ? row.mountPath : undefined,
+            }))
+        : []
       setSpaces(next)
     } catch {
-      setSpaces([{ id: 'default', label: '默认 Space' }])
+      setSpaces([])
     }
   }, [])
 
   const createSession = useCallback(async (): Promise<string> => {
+    if (!spaceId) throw new Error('No active Space')
     const res = await fetch(`${SIDECAR_URL}/sessions${qsSpace(spaceId)}`, { method: 'POST' })
     const session: SessionMeta = await res.json()
     setSessions(prev => [session, ...prev])
@@ -112,8 +145,49 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return session.id
   }, [spaceId])
 
+  const createSpaceLibrary = useCallback(async (mountPath: string, displayName?: string): Promise<SpaceMeta> => {
+    const body = JSON.stringify({
+      mountPath: mountPath.trim(),
+      displayName: displayName?.trim() || undefined,
+    })
+    let res = await fetch(`${SIDECAR_URL}/registry/spaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+    // Compatibility fallback for old sidecar builds that do not expose /registry/spaces yet.
+    if (res.status === 404) {
+      res = await fetch(`${SIDECAR_URL}/registry/bootstrap`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      })
+    }
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string
+      spaceId?: string
+      displayName?: string
+      libraryId?: string
+      mountPath?: string
+    }
+    if (!res.ok || !data.spaceId || !isUuidString(data.spaceId)) {
+      const msg = typeof data.error === 'string' ? data.error : `Create space failed (${res.status})`
+      throw new Error(msg)
+    }
+    const next: SpaceMeta = {
+      id: data.spaceId,
+      label: typeof data.displayName === 'string' && data.displayName.trim() ? data.displayName.trim() : data.spaceId,
+      libraryId: typeof data.libraryId === 'string' ? data.libraryId : undefined,
+      mountPath: typeof data.mountPath === 'string' ? data.mountPath : undefined,
+    }
+    setSpaces((prev) => [next, ...prev.filter((s) => s.id !== next.id)])
+    setSpaceId(next.id)
+    return next
+  }, [setSpaceId])
+
   const deleteSession = useCallback(async (id: string) => {
-    await fetch(`${SIDECAR_URL}/sessions/${id}`, { method: 'DELETE' })
+    if (!spaceId) return
+    await fetch(`${SIDECAR_URL}/sessions/${id}${qsSpace(spaceId)}`, { method: 'DELETE' })
     setSessions(prev => {
       const filtered = prev.filter(s => s.id !== id)
       if (activeSessionIdRef.current === id) {
@@ -121,7 +195,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       }
       return filtered
     })
-  }, [])
+  }, [spaceId])
 
   const openSpaceInNewWindow = useCallback(async (targetSpaceId: string): Promise<SpaceSwitchOutcome> => {
     const ok = await openAndFocusSpace(targetSpaceId)
@@ -131,6 +205,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshSpaces()
   }, [refreshSpaces])
+
+  /** Pick first Space when URL/storage missing or stale (after onboarding). */
+  useEffect(() => {
+    if (spaces.length === 0) return
+    const known = spaces.some((s) => s.id === spaceId)
+    if (!spaceId || !known) {
+      setSpaceId(spaces[0].id)
+    }
+  }, [spaces, spaceId, setSpaceId])
 
   // Refresh when space changes (same dependency chain as polling)
   useEffect(() => {
@@ -151,6 +234,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setSpaceId,
       spaces,
       refreshSpaces,
+      createSpaceLibrary,
       sessions,
       activeSessionId,
       setActiveSessionId,

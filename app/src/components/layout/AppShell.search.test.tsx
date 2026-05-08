@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { AppShell } from './AppShell'
 import { useSession } from '../../contexts/SessionContext'
 
@@ -51,11 +51,13 @@ vi.mock('../../hooks/useDynamicIslandState', () => ({
 
 const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString()
 
+const SPACE_A = 'a0000000-0000-4000-8000-000000000001'
+
 function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {}) {
   return {
-    spaceId: 'default',
+    spaceId: SPACE_A,
     setSpaceId: vi.fn(),
-    spaces: [{ id: 'default', label: '默认 Space' }],
+    spaces: [{ id: SPACE_A, label: '默认 Space' }],
     refreshSpaces: vi.fn().mockResolvedValue(undefined),
     sessions: [
       { id: 's1', title: 'Growth Weekly Sync', createdAt: iso(120_000), updatedAt: iso(60_000), artifactPreview: 'weekly report summary' },
@@ -110,5 +112,19 @@ describe('AppShell global search', () => {
     expect(setActiveSessionId).toHaveBeenCalledWith('s2')
     expect(screen.queryByRole('dialog', { name: '全局搜索' })).not.toBeInTheDocument()
     expect(screen.getByTestId('editor-center-panel')).toBeInTheDocument()
+  })
+
+  it('loads active session artifact with required space_id query', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ artifactContent: '', messages: [] }),
+    })) as unknown as typeof fetch
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<AppShell />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining(`/sessions/s1?space_id=${SPACE_A}`))
+    })
   })
 })

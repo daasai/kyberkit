@@ -8,7 +8,8 @@ import { replaceAll } from '@milkdown/utils'
 import { useArtifact } from '../../contexts/ArtifactContext'
 import { useSession } from '../../contexts/SessionContext'
 import { KEVIN_FOCUS_CENTER_EVENT } from '../../lib/focusCenter'
-import { SIDECAR_URL } from '../../config/sidecarUrl'
+import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
+import { inferArtifactTitle, truncateTitle } from '../../lib/artifactTitle'
 
 const WELCOME_MARKDOWN = `# 欢迎使用 Kevin
 
@@ -89,8 +90,9 @@ function MilkdownEditor({ content, streaming }: { content: string; streaming: bo
 
 export function CenterPanel() {
   const { artifact, loadArtifact, clearArtifact } = useArtifact()
-  const { sessions, activeSessionId, setActiveSessionId } = useSession()
+  const { sessions, activeSessionId, setActiveSessionId, spaceId } = useSession()
   const [openTabIds, setOpenTabIds] = useState<string[]>([])
+  const [artifactTitleBySession, setArtifactTitleBySession] = useState<Record<string, string>>({})
   const [centerFlash, setCenterFlash] = useState(false)
   const canvasAnchorRef = useRef<HTMLDivElement>(null)
 
@@ -109,10 +111,9 @@ export function CenterPanel() {
 
   // Add session to open tabs when it becomes active
   useEffect(() => {
-    if (activeSessionId && !openTabIds.includes(activeSessionId)) {
-      setOpenTabIds(prev => [...prev, activeSessionId])
-    }
-  }, [activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!activeSessionId) return
+    setOpenTabIds((prev) => (prev.includes(activeSessionId) ? prev : [...prev, activeSessionId]))
+  }, [activeSessionId])
 
   const closeTab = (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -124,11 +125,15 @@ export function CenterPanel() {
     async (id: string) => {
       setActiveSessionId(id)
       try {
-        const res = await fetch(`${SIDECAR_URL}/sessions/${id}`)
+        const res = await fetch(`${SIDECAR_URL}/sessions/${id}${qsSpace(spaceId)}`)
         if (!res.ok) return
         const data = (await res.json()) as { artifactContent?: string }
         if (data.artifactContent?.trim()) {
           loadArtifact(id, data.artifactContent)
+          const inferred = inferArtifactTitle(data.artifactContent)
+          if (inferred) {
+            setArtifactTitleBySession((prev) => ({ ...prev, [id]: inferred }))
+          }
         } else {
           clearArtifact()
         }
@@ -136,14 +141,28 @@ export function CenterPanel() {
         /* ignore */
       }
     },
-    [setActiveSessionId, loadArtifact, clearArtifact],
+    [setActiveSessionId, loadArtifact, clearArtifact, spaceId],
   )
 
+  // Keep tab title synced with the latest in-memory artifact while streaming/after completion.
+  useEffect(() => {
+    if (!artifact.sessionId) return
+    const inferred = inferArtifactTitle(artifact.content)
+    if (!inferred) return
+    setArtifactTitleBySession((prev) => ({ ...prev, [artifact.sessionId as string]: inferred }))
+  }, [artifact.sessionId, artifact.content])
+
   const getTabLabel = (id: string): string => {
+    if (artifact.sessionId === id) {
+      const live = inferArtifactTitle(artifact.content)
+      if (live) return truncateTitle(live, 18)
+    }
+    const artTitle = artifactTitleBySession[id]
+    if (artTitle) return truncateTitle(artTitle, 18)
     const session = sessions.find(s => s.id === id)
     if (!session) return id.slice(0, 8)
     if (session.title === 'New Session') return '新会话'
-    return session.title.length > 18 ? session.title.slice(0, 18) + '…' : session.title
+    return truncateTitle(session.title, 18)
   }
 
   const displayContent = artifact.content || ''
@@ -192,17 +211,10 @@ export function CenterPanel() {
             openTabIds.map(id => {
               const isActive = id === activeSessionId
               return (
-                <div
+                <button
                   key={id}
-                  role="button"
-                  tabIndex={0}
+                  type="button"
                   onClick={() => void activateSessionTab(id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      void activateSessionTab(id)
-                    }
-                  }}
                   style={{
                     padding: '8px 12px',
                     fontSize: '13px', fontWeight: 500,
@@ -216,9 +228,8 @@ export function CenterPanel() {
                     position: 'relative', top: '1px',
                     transition: 'background 150ms, color 150ms',
                     maxWidth: '180px',
+                    textAlign: 'left',
                   }}
-                  onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'var(--color-surface-container)' }}
-                  onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: '14px', flexShrink: 0 }}>description</span>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -226,6 +237,7 @@ export function CenterPanel() {
                   </span>
                   <button
                     onClick={e => closeTab(id, e)}
+                    type="button"
                     style={{
                       flexShrink: 0, background: 'transparent', border: 'none',
                       cursor: 'pointer', padding: '2px', borderRadius: '4px',
@@ -233,12 +245,10 @@ export function CenterPanel() {
                       display: 'flex', alignItems: 'center',
                       transition: 'background 150ms',
                     }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                   >
                     <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>close</span>
                   </button>
-                </div>
+                </button>
               )
             })
           )}
@@ -247,14 +257,12 @@ export function CenterPanel() {
         {/* Right actions */}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center', paddingBottom: '4px', flexShrink: 0 }}>
           {['edit', 'more_horiz'].map(icon => (
-            <button key={icon} style={{
+            <button key={icon} type="button" style={{
               padding: '6px', background: 'transparent', border: 'none', borderRadius: '6px',
               cursor: 'pointer', color: 'var(--color-on-surface-variant)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               transition: 'background 150ms',
             }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             >
               <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>{icon}</span>
             </button>
@@ -264,14 +272,13 @@ export function CenterPanel() {
             <button
               onClick={() => navigator.clipboard.writeText(displayContent)}
               title="复制为 Markdown"
+              type="button"
               style={{
                 padding: '4px 10px', background: 'transparent', border: '1px solid var(--color-outline-variant)',
                 borderRadius: '6px', cursor: 'pointer', color: 'var(--color-on-surface-variant)',
                 display: 'flex', alignItems: 'center', gap: '4px',
                 fontSize: '12px', transition: 'background 150ms',
               }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             >
               <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>content_copy</span>
               复制

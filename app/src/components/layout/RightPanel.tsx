@@ -4,6 +4,15 @@ import { useArtifact } from '../../contexts/ArtifactContext'
 import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
 import { summarizeArtifactMarkdown } from '../../lib/artifactSummary'
 import { requestFocusKevinCenter } from '../../lib/focusCenter'
+import {
+  KEVIN_LIBRARY_SELECTION_EVENT,
+  emitLibrarySelection,
+  formatDirectoryBadge,
+  getSelectedLibraryDir,
+  toLibraryRelativePath,
+  toParentLibraryDir,
+  type LibrarySelectionEventDetail,
+} from '../../lib/librarySelection'
 import { QUICK_TEMPLATES } from '../../data/templates'
 
 type ToolCall = { label: string; icon: string }
@@ -16,6 +25,7 @@ type ArtifactStrip = {
 }
 
 type Message = {
+  id: string
   role: 'user' | 'ai'
   content: string
   toolCalls?: ToolCall[]
@@ -46,6 +56,7 @@ export function RightPanel() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [sendHint, setSendHint] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'chat' | 'quick'>('chat')
+  const [currentDirPath, setCurrentDirPath] = useState<string | null>(getSelectedLibraryDir(spaceId))
   const [artifactsBySession, setArtifactsBySession] = useState<Record<string, SessionArtifactEntry[]>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
   /** When true, skip hydrating chat from Sidecar (avoids wiping optimistic rows right after createSession). */
@@ -56,16 +67,25 @@ export function RightPanel() {
     window.dispatchEvent(new CustomEvent<IslandEvent>(ISLAND_EVENT_NAME, { detail }))
   }, [])
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
   // Space switch must not leak old-space state across windows
   useEffect(() => {
     setMessages([])
     setSendHint(null)
     setArtifactsBySession({})
     artifactDraftRef.current = ''
+    setCurrentDirPath(getSelectedLibraryDir(spaceId))
+  }, [spaceId])
+
+  useEffect(() => {
+    const onSelection = (e: Event) => {
+      const detail = (e as CustomEvent<LibrarySelectionEventDetail>).detail
+      if (!detail || detail.spaceId !== spaceId) return
+      setCurrentDirPath(detail.selectedDirPath)
+    }
+    window.addEventListener(KEVIN_LIBRARY_SELECTION_EVENT, onSelection as EventListener)
+    return () => {
+      window.removeEventListener(KEVIN_LIBRARY_SELECTION_EVENT, onSelection as EventListener)
+    }
   }, [spaceId])
 
   // Load persisted chat when the active session changes (keeps RightPanel in sync with LeftSidebar)
@@ -86,7 +106,8 @@ export function RightPanel() {
           updatedAt?: string
         }
         const rows = data.messages ?? []
-        const loaded: Message[] = rows.map((m) => ({
+        const loaded: Message[] = rows.map((m, idx) => ({
+          id: `hist-${idx}-${m.role}-${(m.content ?? '').slice(0, 24)}`,
           role: m.role === 'user' ? 'user' : 'ai',
           content: m.content ?? '',
         }))
@@ -122,7 +143,7 @@ export function RightPanel() {
     return () => {
       cancelled = true
     }
-  }, [activeSessionId])
+  }, [activeSessionId, spaceId])
 
   const openStripInCenter = useCallback(
     (sessionId: string, strip: ArtifactStrip) => {
@@ -148,16 +169,30 @@ export function RightPanel() {
     emitIslandEvent({ type: 'task.started', taskName: 'Processing request' })
     setActiveTab('chat')
     setSendHint(null)
-    setMessages(prev => [...prev, { role: 'user', content: trimmed }, { role: 'ai', content: '' }])
+    setMessages(prev => [
+      ...prev,
+      { id: `user-${crypto.randomUUID()}`, role: 'user', content: trimmed },
+      { id: `ai-${crypto.randomUUID()}`, role: 'ai', content: '' },
+    ])
     setIsStreaming(true)
     setInput('')
 
     try {
-      const res = await fetch(`${SIDECAR_URL}/sessions/${sessionId}/messages${qsSpace(spaceId)}`, {
+      const postMessage = (sid: string) => fetch(`${SIDECAR_URL}/sessions/${sid}/messages${qsSpace(spaceId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: trimmed }),
+        body: JSON.stringify({
+          message: trimmed,
+          selectedLibraryDir: getSelectedLibraryDir(spaceId),
+        }),
       })
+      let res = await postMessage(sessionId)
+      // Recover from stale activeSessionId right after switching/creating a Space.
+      if (res.status === 404) {
+        const freshSessionId = await createSession()
+        sessionId = freshSessionId
+        res = await postMessage(sessionId)
+      }
 
       if (res.status === 429) {
         const errBody = (await res.json().catch(() => ({}))) as { error?: string }
@@ -227,9 +262,20 @@ export function RightPanel() {
               const aid = typeof event.artifact_id === 'string' ? event.artifact_id : crypto.randomUUID()
               const summary =
                 typeof event.summary === 'string' ? event.summary : summarizeArtifactMarkdown(snap)
+              const generatedLibraryPath =
+                typeof event.library_path === 'string' ? event.library_path : null
               onArtifactEnd()
               emitIslandEvent({ type: 'task.completed', summary: summary || 'Artifact ready' })
               refreshSessions()
+              if (generatedLibraryPath) {
+                const nextDir = toParentLibraryDir(generatedLibraryPath)
+                setCurrentDirPath(nextDir)
+                emitLibrarySelection({
+                  spaceId,
+                  selectedPath: generatedLibraryPath,
+                  selectedDirPath: nextDir,
+                })
+              }
               setArtifactsBySession(prev => {
                 const list = prev[sid] ?? []
                 const nextEntry: SessionArtifactEntry = {
@@ -289,6 +335,7 @@ export function RightPanel() {
         if (prev.length === 0) return prev
         const out = [...prev]
         out[out.length - 1] = {
+          id: out[out.length - 1]?.id ?? `ai-${crypto.randomUUID()}`,
           role: 'ai',
           content: '⚠️ 无法连接到 Kevin 服务（Sidecar 未启动）',
         }
@@ -300,13 +347,15 @@ export function RightPanel() {
       setIsStreaming(false)
       emitIslandEvent({ type: 'task.completed', summary: 'Task completed' })
     }
-  }, [activeSessionId, isStreaming, createSession, onArtifactStart, onArtifactDelta, onArtifactEnd, refreshSessions, emitIslandEvent])
+  }, [activeSessionId, isStreaming, createSession, onArtifactStart, onArtifactDelta, onArtifactEnd, refreshSessions, emitIslandEvent, spaceId])
 
   const handleSend = () => sendMessage(input)
 
   const sessionArtifactList = activeSessionId ? (artifactsBySession[activeSessionId] ?? []) : []
   const lastAi = [...messages].reverse().find((m) => m.role === 'ai')
   const processToolCalls = lastAi?.toolCalls ?? []
+  const currentDirTitle = toLibraryRelativePath(currentDirPath) || '根目录'
+  const currentDirBadge = formatDirectoryBadge(currentDirPath, 40)
 
   return (
     <div style={{
@@ -399,9 +448,9 @@ export function RightPanel() {
             </div>
             {processToolCalls.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '120px', overflowY: 'auto' }}>
-                {processToolCalls.map((t, idx) => (
+                {processToolCalls.map((t) => (
                   <div
-                    key={`${t.label}-${idx}`}
+                    key={`${t.icon}-${t.label}`}
                     style={{
                       fontSize: '11px',
                       color: 'var(--color-on-surface-variant)',
@@ -469,7 +518,7 @@ export function RightPanel() {
 
             {messages.map((msg, i) => (
               msg.role === 'user' ? (
-                <div key={i} style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div key={msg.id} style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <div style={{
                     background: 'var(--color-surface-container)',
                     padding: '10px 14px',
@@ -484,7 +533,7 @@ export function RightPanel() {
                   </div>
                 </div>
               ) : (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
+                <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%' }}>
                   {isStreaming && i === messages.length - 1 && msg.content === '' && (msg.toolCalls?.length ?? 0) === 0 && (
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: '8px',
@@ -526,8 +575,8 @@ export function RightPanel() {
 
                           {msg.toolCalls && msg.toolCalls.length > 0 && (
                             <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                              {msg.toolCalls.map((t, idx) => (
-                                <div key={idx} style={{
+                              {msg.toolCalls.map((t) => (
+                                <div key={`${t.icon}-${t.label}`} style={{
                                   fontSize: '11px', color: 'var(--color-on-surface-variant)',
                                   background: 'var(--color-surface-container-lowest)',
                                   padding: '3px 8px', borderRadius: '4px',
@@ -624,10 +673,36 @@ export function RightPanel() {
           borderRadius: '12px',
           boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
           transition: 'border-color 150ms, box-shadow 150ms',
+          position: 'relative',
+          paddingTop: '10px',
         }}
           onFocusCapture={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--color-primary)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 0 0 3px color-mix(in srgb, var(--color-primary) 15%, transparent)' }}
           onBlurCapture={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--color-outline-variant)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 1px 4px rgba(0,0,0,0.04)' }}
         >
+          <div
+            title={currentDirTitle}
+            style={{
+              position: 'absolute',
+              top: '-10px',
+              left: '12px',
+              maxWidth: '72%',
+              height: '20px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '0 10px',
+              borderRadius: '999px',
+              border: '1px solid var(--color-outline-variant)',
+              background: 'var(--color-surface)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+              fontSize: '11px',
+              color: 'var(--color-on-surface-variant)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {currentDirBadge}
+          </div>
           <textarea
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -644,19 +719,18 @@ export function RightPanel() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 12px 10px' }}>
             <div style={{ display: 'flex', gap: '4px', color: 'var(--color-on-surface-variant)' }}>
               {['attach_file', 'alternate_email'].map(icon => (
-                <button key={icon} style={{
+                <button type="button" key={icon} style={{
                   padding: '6px', background: 'transparent', border: 'none',
                   borderRadius: '8px', cursor: 'pointer', color: 'var(--color-on-surface-variant)',
                   display: 'flex', alignItems: 'center', transition: 'background 150ms',
                 }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>{icon}</span>
                 </button>
               ))}
             </div>
             <button
+              type="button"
               onClick={handleSend}
               disabled={isStreaming || !input.trim()}
               style={{

@@ -276,26 +276,20 @@ fn maybe_start_sidecar(app: &mut App) -> Result<(), String> {
   }
 }
 
-/// Open a dedicated window for another session/space (A1). Dev uses Vite URL; release uses app index + query.
+/// Open or focus a dedicated window for one Space. Query key must align with web (`space_id`).
 #[tauri::command]
 fn open_and_focus_space_window(app: tauri::AppHandle, target_space_id: String) -> Result<(), String> {
-  let label = format!(
-    "space-{}",
-    std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .map(|d| d.as_millis())
-      .unwrap_or(0)
-  );
+  let label = format!("space-{}", target_space_id);
 
   let url: WebviewUrl = if cfg!(debug_assertions) {
-    let raw = format!("http://127.0.0.1:5173/?space={}", target_space_id);
+    let raw = format!("http://127.0.0.1:5173/?space_id={}", target_space_id);
     WebviewUrl::External(
       raw
         .parse::<url::Url>()
         .map_err(|e| e.to_string())?,
     )
   } else {
-    let path = format!("index.html?space={}", target_space_id);
+    let path = format!("index.html?space_id={}", target_space_id);
     WebviewUrl::App(path.into())
   };
 

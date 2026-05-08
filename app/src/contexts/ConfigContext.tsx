@@ -14,6 +14,8 @@ import { SIDECAR_URL } from '../config/sidecarUrl'
 
 export interface KevinConfigPayload {
   onboardingComplete: boolean
+  /** At least one Space+Library exists in node registry. */
+  libraryConfigured: boolean
   modelList: string[]
   modelDefault: string
   user: {

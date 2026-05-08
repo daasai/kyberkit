@@ -2,6 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
 import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
+import { SpaceManagerPanel } from './SpaceManagerPanel'
+import {
+  KEVIN_LIBRARY_SELECTION_EVENT,
+  emitLibrarySelection,
+  getSelectedLibraryDir,
+  setSelectedLibraryDir,
+  toParentLibraryDir,
+  type LibrarySelectionEventDetail,
+} from '../../lib/librarySelection'
 
 type Connector = {
   name: string
@@ -47,11 +56,11 @@ function collectDefaultExpandedPaths(nodes: LibraryNode[], depth = 0): string[] 
   return paths
 }
 
-function findFirstFilePath(nodes: LibraryNode[]): string | null {
+function findFirstDirPath(nodes: LibraryNode[]): string | null {
   for (const node of nodes) {
-    if (node.kind === 'file') return node.path
+    if (node.kind === 'dir') return node.path
     if (node.children?.length) {
-      const nested = findFirstFilePath(node.children)
+      const nested = findFirstDirPath(node.children)
       if (nested) return nested
     }
   }
@@ -77,11 +86,13 @@ export function LeftSidebar({
     setSpaceId,
     spaces,
     refreshSpaces,
+    createSpaceLibrary,
     openSpaceInNewWindow,
   } = useSession()
-  const { clearArtifact } = useArtifact()
+  const { clearArtifact, loadArtifact } = useArtifact()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [spaceMenuOpen, setSpaceMenuOpen] = useState(false)
+  const [spaceManagerOpen, setSpaceManagerOpen] = useState(false)
   const spaceMenuRef = useRef<HTMLDivElement>(null)
   const [pendingSignoffSessionIds, setPendingSignoffSessionIds] = useState<Set<string>>(new Set())
   const [rawConnectors, setRawConnectors] = useState<Connector[]>([])
@@ -90,8 +101,10 @@ export function LeftSidebar({
   const [libraryLoading, setLibraryLoading] = useState(false)
   const [libraryError, setLibraryError] = useState(false)
   const [expandedLibraryPaths, setExpandedLibraryPaths] = useState<Set<string>>(new Set())
+  /** Currently selected node (file or dir) for highlight. */
   const [selectedLibraryPath, setSelectedLibraryPath] = useState<string | null>(null)
-  const [suggestedLibraryPath, setSuggestedLibraryPath] = useState<string | null>(null)
+  /** Current “working directory” under the Library mount (dir only). */
+  const [selectedLibraryDirPath, setSelectedLibraryDirPath] = useState<string | null>(null)
   const connectors = sortConnectors(rawConnectors)
 
   // Dynamic connector fetch with strict unavailable state (no demo fallback).
@@ -149,15 +162,18 @@ export function LeftSidebar({
         if (cancelled) return
         setLibraryNodes(data)
         setExpandedLibraryPaths(new Set(collectDefaultExpandedPaths(data)))
-        const firstPath = findFirstFilePath(data)
-        setSuggestedLibraryPath(firstPath)
-        setSelectedLibraryPath((prev) => prev ?? firstPath)
+        const stored = getSelectedLibraryDir(spaceId)
+        const fallback = findFirstDirPath(data)
+        const next = stored ?? fallback
+        setSelectedLibraryPath(next)
+        setSelectedLibraryDirPath(next)
+        setSelectedLibraryDir(spaceId, next)
       } catch {
         if (!cancelled) {
           setLibraryNodes([])
           setExpandedLibraryPaths(new Set())
-          setSuggestedLibraryPath(null)
-          setSelectedLibraryPath(null)
+          setSelectedLibraryDirPath(null)
+          setSelectedLibraryDir(spaceId, null)
           setLibraryError(true)
         }
       } finally {
@@ -176,6 +192,29 @@ export function LeftSidebar({
       return next
     })
   }
+
+  const applySelection = (path: string | null, dirPath: string | null) => {
+    setSelectedLibraryPath(path)
+    setSelectedLibraryDirPath(dirPath)
+    setSelectedLibraryDir(spaceId, dirPath)
+    emitLibrarySelection({ spaceId, selectedPath: path, selectedDirPath: dirPath })
+  }
+
+  useEffect(() => {
+    const onSelection = (e: Event) => {
+      const detail = (e as CustomEvent<LibrarySelectionEventDetail>).detail
+      if (!detail || detail.spaceId !== spaceId) return
+      if (detail.selectedPath) {
+        setSelectedLibraryPath(detail.selectedPath)
+      }
+      setSelectedLibraryDirPath(detail.selectedDirPath)
+      setSelectedLibraryDir(spaceId, detail.selectedDirPath)
+    }
+    window.addEventListener(KEVIN_LIBRARY_SELECTION_EVENT, onSelection as EventListener)
+    return () => {
+      window.removeEventListener(KEVIN_LIBRARY_SELECTION_EVENT, onSelection as EventListener)
+    }
+  }, [spaceId])
 
   /** Switch Space inside this window (PRD §7.E vault switcher). */
   const selectSpaceInCurrentWindow = (targetSpaceId: string) => {
@@ -239,7 +278,7 @@ export function LeftSidebar({
             { icon: 'extension', label: 'Skill Store', action: () => onOpenSkillStore?.() },
             { icon: 'smart_toy', label: '自动化',     action: () => onOpenAutomation?.() },
           ].map(({ icon, label, action }) => (
-            <button key={label} onClick={action} style={{
+            <button key={label} type="button" onClick={action} style={{
               display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
               padding: '8px 12px', borderRadius: '8px',
               fontSize: '14px', fontWeight: 500, textDecoration: 'none',
@@ -247,8 +286,6 @@ export function LeftSidebar({
               color: 'var(--color-on-surface-variant)',
               transition: 'background 150ms, color 150ms',
             }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--color-surface-container)'; (e.currentTarget as HTMLElement).style.color = 'var(--color-on-surface)' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'var(--color-on-surface-variant)' }}
             >
               <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>{icon}</span>
               {label}
@@ -259,7 +296,10 @@ export function LeftSidebar({
         {/* Document Library */}
         <div style={{ marginBottom: '20px' }}>
           <div style={{ padding: '0 12px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-on-surface-variant)' }}>
+            <span
+              title={selectedLibraryDirPath ? `当前目录: ${selectedLibraryDirPath}` : '当前目录: (Library 根目录)'}
+              style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-on-surface-variant)' }}
+            >
               文档库
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -282,16 +322,19 @@ export function LeftSidebar({
                       if (!Array.isArray(data)) throw new Error('invalid library tree payload')
                       setLibraryNodes(data)
                       setExpandedLibraryPaths(new Set(collectDefaultExpandedPaths(data)))
-                      const firstPath = findFirstFilePath(data)
-                      setSuggestedLibraryPath(firstPath)
-                      setSelectedLibraryPath((prev) => prev ?? firstPath)
+                      const stored = getSelectedLibraryDir(spaceId)
+                      const fallback = findFirstDirPath(data)
+                      const next = stored ?? fallback
+                      setSelectedLibraryPath(next)
+                      setSelectedLibraryDirPath(next)
+                      setSelectedLibraryDir(spaceId, next)
                       setLibraryError(false)
                     })
                     .catch(() => {
                       setLibraryNodes([])
                       setExpandedLibraryPaths(new Set())
-                      setSuggestedLibraryPath(null)
-                      setSelectedLibraryPath(null)
+                      setSelectedLibraryDirPath(null)
+                      setSelectedLibraryDir(spaceId, null)
                       setLibraryError(true)
                     })
                     .finally(() => setLibraryLoading(false))
@@ -333,18 +376,53 @@ export function LeftSidebar({
               const renderNode = (entry: LibraryNode, depth: number): React.ReactNode => {
                 const isDir = entry.kind === 'dir'
                 const expanded = isDir && expandedLibraryPaths.has(entry.path)
-                const isSelected = selectedLibraryPath === entry.path
-                const isSuggested = !isSelected && suggestedLibraryPath === entry.path
+                const isSelectedNode = selectedLibraryPath === entry.path
                 return (
                   <div key={entry.path}>
                     <button
                       type="button"
                       onClick={() => {
                         if (isDir) {
+                          applySelection(entry.path, entry.path)
                           toggleLibraryDir(entry.path)
                           return
                         }
-                        setSelectedLibraryPath(entry.path)
+                        const parentDir = toParentLibraryDir(entry.path)
+                        applySelection(entry.path, parentDir)
+                        // Try previewing selected file in center panel; keep existing artifact if unsupported.
+                        if (!spaceId) return
+                        const q = qsSpace(spaceId)
+                        const sep = q ? '&' : '?'
+                        fetch(`${SIDECAR_URL}/library/file${q}${sep}path=${encodeURIComponent(entry.path)}`)
+                          .then(async (r) => {
+                            const data = await r.json().catch(() => ({}))
+                            return { ok: r.ok, status: r.status, data }
+                          })
+                          .then(({ ok, status, data }: { ok: boolean; status: number; data: Record<string, unknown> }) => {
+                            if (!ok) {
+                              const reason = String(data.reason ?? '')
+                              const size = typeof data.size === 'number' ? data.size : null
+                              const maxSize = typeof data.maxSize === 'number' ? data.maxSize : null
+                              const sizeMb = size !== null ? (size / 1024 / 1024).toFixed(2) : null
+                              const maxMb = maxSize !== null ? (maxSize / 1024 / 1024).toFixed(2) : null
+                              const hint =
+                                reason === 'too_large'
+                                  ? `该文件大小约 ${sizeMb ?? '?'} MB，超过预览上限 ${maxMb ?? '?'} MB。`
+                                  : reason === 'binary'
+                                    ? '该文件为二进制内容，不支持文本预览。'
+                                    : '该文件暂不支持预览。'
+                              const fallback = `# 文件预览不可用\n\n- 文件：\`${entry.name}\`\n- 状态码：\`${status}\`\n- 原因：${hint}\n`
+                              loadArtifact(activeSessionId ?? `preview-${spaceId}`, fallback)
+                              return
+                            }
+                            if (typeof data.content === 'string') {
+                              loadArtifact(activeSessionId ?? `preview-${spaceId}`, data.content)
+                            }
+                          })
+                          .catch(() => {
+                            const fallback = `# 文件预览不可用\n\n- 文件：\`${entry.name}\`\n- 原因：请求失败或内容不可读。`
+                            loadArtifact(activeSessionId ?? `preview-${spaceId}`, fallback)
+                          })
                       }}
                       style={{
                         width: '100%',
@@ -354,11 +432,9 @@ export function LeftSidebar({
                         padding: '6px 12px',
                         paddingLeft: `${12 + depth * 14}px`,
                         border: 'none',
-                        background: isSelected
+                        background: isSelectedNode
                           ? 'color-mix(in srgb, var(--color-primary) 18%, transparent)'
-                          : isSuggested
-                            ? 'color-mix(in srgb, var(--color-primary) 9%, transparent)'
-                            : 'transparent',
+                          : 'transparent',
                         borderRadius: '8px',
                         cursor: 'pointer',
                         color: 'var(--color-on-surface)',
@@ -375,7 +451,10 @@ export function LeftSidebar({
                       <span className="material-symbols-outlined" style={{ fontSize: '15px', color: isDir ? 'var(--color-primary)' : 'var(--color-on-surface-variant)', flexShrink: 0 }}>
                         {isDir ? 'folder_open' : 'description'}
                       </span>
-                      <span style={{ fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
+                      <span
+                        title={entry.name}
+                        style={{ fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}
+                      >
                         {entry.name}
                       </span>
                     </button>
@@ -432,13 +511,11 @@ export function LeftSidebar({
             <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-on-surface-variant)' }}>
               历史会话
             </span>
-            <button onClick={handleNew} style={{
+            <button type="button" onClick={handleNew} style={{
               background: 'transparent', border: 'none', cursor: 'pointer',
               color: 'var(--color-on-surface-variant)', display: 'flex', alignItems: 'center',
               borderRadius: '4px', padding: '2px',
             }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             >
               <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>add</span>
             </button>
@@ -453,12 +530,10 @@ export function LeftSidebar({
               const isActive = id === activeSessionId
               const hasPendingSignoff = pendingSignoffSessionIds.has(id)
               return (
-                <div
+                <button
                   key={id}
-                  role="button"
-                  tabIndex={0}
+                  type="button"
                   onClick={() => setActiveSessionId(id)}
-                  onKeyDown={(e) => e.key === 'Enter' && setActiveSessionId(id)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '8px',
                     padding: '8px 12px', borderRadius: '8px',
@@ -467,9 +542,10 @@ export function LeftSidebar({
                     background: isActive ? 'var(--color-surface-container)' : 'transparent',
                     position: 'relative', cursor: 'pointer',
                     transition: 'background 150ms, color 150ms',
+                    border: 'none',
+                    width: '100%',
+                    textAlign: 'left',
                   }}
-                  onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = 'var(--color-surface-container)'; (e.currentTarget as HTMLElement).style.color = 'var(--color-on-surface)' } }}
-                  onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'var(--color-on-surface-variant)' } }}
                 >
                   {isActive && (
                     <div style={{
@@ -491,6 +567,7 @@ export function LeftSidebar({
                   <button
                     onClick={e => handleDelete(e, id)}
                     disabled={deletingId === id}
+                    type="button"
                     style={{
                       flexShrink: 0, opacity: 0, background: 'transparent', border: 'none',
                       cursor: 'pointer', padding: '2px', borderRadius: '4px',
@@ -501,7 +578,7 @@ export function LeftSidebar({
                   >
                     <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>close</span>
                   </button>
-                </div>
+                </button>
               )
             })
           )}
@@ -543,12 +620,6 @@ export function LeftSidebar({
             alignItems: 'center',
             gap: '8px',
             transition: 'background 150ms',
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-surface-container)'
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-surface-container-lowest)'
           }}
         >
           <span className="material-symbols-outlined" style={{ fontSize: '18px', flexShrink: 0 }}>
@@ -634,7 +705,7 @@ export function LeftSidebar({
                 role="menuitem"
                 onClick={() => {
                   setSpaceMenuOpen(false)
-                  void openSpaceInNewWindow(spaceId)
+                  setSpaceManagerOpen(true)
                 }}
                 style={{
                   width: '100%',
@@ -658,6 +729,24 @@ export function LeftSidebar({
           </div>
         )}
       </div>
+
+      <SpaceManagerPanel
+        open={spaceManagerOpen}
+        spaces={spaces}
+        currentSpaceId={spaceId}
+        onClose={() => setSpaceManagerOpen(false)}
+        onSwitchSpace={(id) => {
+          selectSpaceInCurrentWindow(id)
+          setSpaceManagerOpen(false)
+        }}
+        onCreateSpace={async (mountPath, displayName) => {
+          await createSpaceLibrary(mountPath, displayName)
+          await refreshSpaces()
+        }}
+        onOpenInNewWindow={async (id) => {
+          await openSpaceInNewWindow(id)
+        }}
+      />
 
       <style>{`
         div:hover > .session-delete-btn,

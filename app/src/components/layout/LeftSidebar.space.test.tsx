@@ -14,13 +14,16 @@ import { useSession } from '../../contexts/SessionContext'
 
 const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString()
 
+const SPACE_A = 'a0000000-0000-4000-8000-000000000001'
+const SPACE_B = 'b0000000-0000-4000-8000-000000000002'
+
 function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {}) {
   return {
-    spaceId: 'default',
+    spaceId: SPACE_A,
     setSpaceId: vi.fn(),
     spaces: [
-      { id: 'default', label: '默认 Space' },
-      { id: 'beta', label: 'Beta Space' },
+      { id: SPACE_A, label: '默认 Space' },
+      { id: SPACE_B, label: 'Beta Space' },
     ],
     refreshSpaces: vi.fn().mockResolvedValue(undefined),
     sessions: [
@@ -32,6 +35,7 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
     createSession: vi.fn(async () => 'new'),
     deleteSession: vi.fn(async () => {}),
     refreshSessions: vi.fn(async () => {}),
+    createSpaceLibrary: vi.fn(async () => ({ id: SPACE_A, label: '默认 Space' })),
     openSpaceInNewWindow: vi.fn(async () => 'focused' as const),
     ...overrides,
   } as ReturnType<typeof useSession>
@@ -66,16 +70,15 @@ describe('LeftSidebar Space switcher', () => {
     const menu = screen.getByTestId('space-switcher-menu')
     const items = within(menu).getAllByRole('menuitem')
     fireEvent.click(items[1] as HTMLElement)
-    expect(setSpaceId).toHaveBeenCalledWith('beta')
+    expect(setSpaceId).toHaveBeenCalledWith(SPACE_B)
   })
 
-  it('manage action opens current Space in a new window', () => {
-    const openSpaceInNewWindow = vi.fn().mockResolvedValue('focused')
-    vi.mocked(useSession).mockReturnValue(baseSessionMock({ openSpaceInNewWindow }))
+  it('manage action opens space manager panel', () => {
+    vi.mocked(useSession).mockReturnValue(baseSessionMock())
     render(<LeftSidebar />)
     fireEvent.click(screen.getByTestId('space-switcher'))
     const menu = screen.getByTestId('space-switcher-menu')
     fireEvent.click(within(menu).getByText('管理 Space…'))
-    expect(openSpaceInNewWindow).toHaveBeenCalledWith('default')
+    expect(screen.getByText('新建 Space')).toBeInTheDocument()
   })
 })

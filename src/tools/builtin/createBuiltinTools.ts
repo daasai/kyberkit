@@ -38,11 +38,57 @@ async function walkFiles(dir: string, out: string[]): Promise<void> {
 
 /**
  * Create all Phase-A builtin atomic tools (CCR-aligned: Read / Write / Edit / Glob / Grep / Bash / Python).
+ * @param workspaceCwd — default cwd for relative paths (Kevin Rev3: Library mount, not process.cwd()).
  */
 export function createBuiltinTools(
   shell: ShellExecutor,
   sandbox: PermissionSandbox,
+  workspaceCwd: string = process.cwd(),
 ): ToolDefinition[] {
+  const listAllowedDirectories = buildTool({
+    name: 'list_allowed_directories',
+    descriptionText: 'List directories that the agent is allowed to access (sandbox roots).',
+    inputSchema: z.object({}),
+    isConcurrencySafe: () => true,
+    isReadOnly: () => true,
+    checkPermissions: async () => ({ behavior: 'allow' as const }),
+    call: async () => {
+      const roots = sandbox.listAllowedPaths();
+      const shown = roots.length > 0 ? roots : [workspaceCwd];
+      return { success: true, output: shown.join('\n') };
+    },
+  });
+
+  const listDirectory = buildTool({
+    name: 'list_directory',
+    descriptionText:
+      'List files and directories under a path (default: cwd). Use for quick folder inspection.',
+    inputSchema: z.object({
+      path: z.string().optional().describe('Directory to list (default: .)'),
+      max: z.number().optional().describe('Max entries to return (default: 200)'),
+    }),
+    maxResultSizeChars: 100_000,
+    isConcurrencySafe: () => true,
+    isReadOnly: () => true,
+    checkPermissions: async (_input, _ctx) => perm(sandbox, ['read_fs']),
+    call: async (input) => {
+      const max = Math.max(1, Math.min(500, input.max ?? 200));
+      const abs = resolveSandboxedPath(input.path ?? '.', workspaceCwd, sandbox);
+      let entries: Awaited<ReturnType<typeof fs.readdir>>;
+      try {
+        entries = await fs.readdir(abs, { withFileTypes: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : 'Failed to read directory';
+        return { success: false, error: msg };
+      }
+      const rows = entries
+        .slice(0, max)
+        .map((e) => `${e.isDirectory() ? 'dir ' : 'file'} ${e.name}`)
+        .join('\n');
+      const extra = entries.length > max ? `\n... and ${entries.length - max} more` : '';
+      return { success: true, output: rows + extra || '(empty)' };
+    },
+  });
   const readFile = buildTool({
     name: 'read_file',
     descriptionText:
@@ -58,7 +104,7 @@ export function createBuiltinTools(
     searchHint: 'read file open cat head',
     checkPermissions: async (_input, _ctx) => perm(sandbox, ['read_fs']),
     call: async (input, _ctx) => {
-      const abs = resolveSandboxedPath(input.path, process.cwd(), sandbox);
+      const abs = resolveSandboxedPath(input.path, workspaceCwd, sandbox);
       let text = await readFileSafe(abs, 500_000);
       if (input.offset !== undefined || input.limit !== undefined) {
         const lines = text.split('\n');
@@ -82,7 +128,7 @@ export function createBuiltinTools(
     isDestructive: () => false,
     checkPermissions: async (_input, _ctx) => perm(sandbox, ['read_fs', 'write_fs']),
     call: async (input, _ctx) => {
-      const abs = resolveSandboxedPath(input.path, process.cwd(), sandbox);
+      const abs = resolveSandboxedPath(input.path, workspaceCwd, sandbox);
       await writeFileSafe(abs, input.content);
       return { success: true, output: `Wrote ${input.content.length} characters to ${input.path}` };
     },
@@ -100,7 +146,7 @@ export function createBuiltinTools(
     isConcurrencySafe: () => false,
     checkPermissions: async (_input, _ctx) => perm(sandbox, ['read_fs', 'write_fs']),
     call: async (input, _ctx) => {
-      const abs = resolveSandboxedPath(input.path, process.cwd(), sandbox);
+      const abs = resolveSandboxedPath(input.path, workspaceCwd, sandbox);
       const before = await readFileSafe(abs, 500_000);
       const count = before.split(input.old_string).length - 1;
       if (count === 0) {
@@ -121,13 +167,13 @@ export function createBuiltinTools(
       'List files under cwd matching a glob pattern (e.g. **/*.csv, src/**/*.ts). Respects .gitignore-style skips for node_modules and .git.',
     inputSchema: z.object({
       pattern: z.string(),
-      cwd: z.string().optional().describe('Directory to search (default: process cwd)'),
+      cwd: z.string().optional().describe('Directory to search (default: workspace cwd)'),
     }),
     isConcurrencySafe: () => true,
     isReadOnly: () => true,
     checkPermissions: async (_input, _ctx) => perm(sandbox, ['read_fs']),
     call: async (input, _ctx) => {
-      const root = resolveSandboxedPath(input.cwd ?? '.', process.cwd(), sandbox);
+      const root = resolveSandboxedPath(input.cwd ?? '.', workspaceCwd, sandbox);
       const files: string[] = [];
       await walkFiles(root, files);
       const relFiles = files
@@ -152,14 +198,14 @@ export function createBuiltinTools(
     isReadOnly: () => true,
     checkPermissions: async (_input, _ctx) => perm(sandbox, ['read_fs']),
     call: async (input, _ctx) => {
-      const base = resolveSandboxedPath(input.path ?? '.', process.cwd(), sandbox);
+      const base = resolveSandboxedPath(input.path ?? '.', workspaceCwd, sandbox);
       const stat = await fs.stat(base).catch(() => null);
       const hits: string[] = [];
       const max = 200;
 
       async function scanFile(file: string) {
         if (hits.length >= max) return;
-        const rel = path.relative(process.cwd(), file);
+        const rel = path.relative(workspaceCwd, file);
         const text = await readFileSafe(file, 200_000);
         const lines = text.split('\n');
         let lineRe: RegExp;
@@ -212,7 +258,7 @@ export function createBuiltinTools(
     interruptBehavior: 'cancel',
     checkPermissions: async (_input, _ctx) => perm(sandbox, ['exec_shell']),
     call: async (input, ctx) => {
-      const cwd = input.cwd ? resolveSandboxedPath(input.cwd, process.cwd(), sandbox) : process.cwd();
+      const cwd = input.cwd ? resolveSandboxedPath(input.cwd, workspaceCwd, sandbox) : workspaceCwd;
       const result = await shell.exec(input.command, {
         cwd,
         timeoutMs: input.timeout_ms ?? 120_000,
@@ -272,7 +318,7 @@ export function createBuiltinTools(
     isConcurrencySafe: () => false,
     checkPermissions: async (_input, _ctx) => perm(sandbox, ['exec_shell', 'read_fs']),
     call: async (input, ctx) => {
-      const cwd = input.cwd ? resolveSandboxedPath(input.cwd, process.cwd(), sandbox) : process.cwd();
+      const cwd = input.cwd ? resolveSandboxedPath(input.cwd, workspaceCwd, sandbox) : workspaceCwd;
       if (input.mode === 'inline') {
         const tmp = path.join(cwd, `.kyber-inline-${randomUUID()}.py`);
         await writeFileSafe(tmp, input.code);
@@ -291,7 +337,7 @@ export function createBuiltinTools(
           await fs.unlink(tmp).catch(() => {});
         }
       }
-      const script = resolveSandboxedPath(input.path, process.cwd(), sandbox);
+      const script = resolveSandboxedPath(input.path, workspaceCwd, sandbox);
       const args = (input.args ?? []).map((a) => JSON.stringify(a)).join(' ');
       const cmd =
         args.length > 0
@@ -310,5 +356,18 @@ export function createBuiltinTools(
     },
   });
 
-  return [readFile, writeFile, editFile, globTool, grepTool, bashTool, pythonTool, planTask];
+  return [
+    // Compat aliases (Kevin UI prompts commonly call these)
+    listAllowedDirectories,
+    listDirectory,
+    // Core builtins
+    readFile,
+    writeFile,
+    editFile,
+    globTool,
+    grepTool,
+    bashTool,
+    pythonTool,
+    planTask,
+  ];
 }

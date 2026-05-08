@@ -13,16 +13,27 @@
  */
 
 import { randomUUID } from 'crypto'
+import { mkdirSync, readFileSync, statSync } from 'fs'
+import { resolve as resolvePath } from 'path'
 import { KyberRuntime } from '../src/runtime/KyberRuntime.js'
 import { SessionManager } from './SessionManager.js'
 import { ArtifactParser } from './ArtifactParser.js'
 import { summarizeArtifactMarkdown } from './artifactSummary.js'
-import { dbListChatMessages, dbPersistChatTurn } from './db.js'
+import { dbCountAllSessions, dbListChatMessages, dbPersistChatTurn } from './db.js'
 import {
   attachSkillSuggestedRuntimeBridge,
   createSpaceEventBroadcaster,
 } from './spaceEventBroadcast.js'
-import { listDiscoveredSpaces, listSpaceDocsTree } from '../src/runtime/paths/PathResolver.js'
+import {
+  ensureKevinLayout,
+  isUuidString,
+  libraryTechRoot,
+  listRegistrySpaces,
+  listSpaceDocsTree,
+  readSpaceLibraryRegistry,
+  resolveSpaceToLibrary,
+  upsertSpaceLibraryBinding,
+} from '../src/runtime/paths/PathResolver.js'
 import {
   loadUserConfig,
   saveUserConfig,
@@ -57,9 +68,11 @@ async function applyKevinEnvFile(): Promise<void> {
 }
 
 await applyKevinEnvFile()
+ensureKevinLayout()
 
 const PORT = 3001
 const startedAt = Date.now()
+const MAX_PREVIEW_BYTES = 5 * 1024 * 1024
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -88,7 +101,7 @@ function listConnectorStatuses(): ConnectorStatus[] {
   )
   const canDiscoverSpaces = (() => {
     try {
-      listDiscoveredSpaces()
+      listRegistrySpaces()
       return true
     } catch {
       return false
@@ -145,6 +158,7 @@ function readConfigPayload() {
   const baseUrl = user.baseUrl?.trim() || null
   return {
     onboardingComplete: Boolean(profile.onboardingComplete),
+    libraryConfigured: readSpaceLibraryRegistry().length > 0,
     modelList,
     modelDefault,
     user: {
@@ -155,11 +169,96 @@ function readConfigPayload() {
   }
 }
 
+type SessionScope = { spaceId: string; libraryId: string; mountPath: string }
+
+function createSpaceLibraryBinding(input: {
+  mountPath?: string
+  displayName?: string
+}): { ok: true; payload: Record<string, unknown> } | { ok: false; status: number; error: string } {
+  const raw = input.mountPath?.trim()
+  if (!raw) return { ok: false, status: 400, error: 'mountPath is required' }
+  let absMount: string
+  try {
+    absMount = resolvePath(raw)
+  } catch {
+    return { ok: false, status: 400, error: 'invalid mountPath' }
+  }
+  try {
+    const st = statSync(absMount)
+    if (!st.isDirectory()) return { ok: false, status: 400, error: 'mountPath must be a directory' }
+  } catch {
+    mkdirSync(absMount, { recursive: true })
+  }
+  const spaceId = randomUUID()
+  const libraryId = randomUUID()
+  const displayName = input.displayName?.trim() || 'Library'
+  mkdirSync(libraryTechRoot(libraryId), { recursive: true })
+  upsertSpaceLibraryBinding({
+    spaceId,
+    libraryId,
+    mountPath: absMount,
+    displayName,
+  })
+  return {
+    ok: true,
+    payload: {
+      spaceId,
+      libraryId,
+      mountPath: absMount,
+      displayName,
+    },
+  }
+}
+
+function resolveScopeFromUrl(url: URL): { scope: SessionScope | null; error?: string; status?: number } {
+  const spaceId = url.searchParams.get('space_id')?.trim()
+  if (!spaceId) return { scope: null, error: 'space_id is required', status: 400 }
+  if (!isUuidString(spaceId)) {
+    return { scope: null, error: 'space_id must be a UUID', status: 400 }
+  }
+  const binding = resolveSpaceToLibrary(spaceId)
+  if (!binding) return { scope: null, error: 'Space has no bound library yet', status: 404 }
+  return {
+    scope: { spaceId: binding.spaceId, libraryId: binding.libraryId, mountPath: binding.mountPath },
+  }
+}
+
+function parseSelectedLibraryDirRef(scope: SessionScope, raw: unknown): string {
+  if (typeof raw !== 'string') return ''
+  const v = raw.trim()
+  if (!v) return ''
+  const prefix = `@/libraries/${scope.libraryId}`
+  if (v === prefix) return ''
+  if (!v.startsWith(`${prefix}/`)) return ''
+  const rel = v.slice(prefix.length + 1).replaceAll('\\', '/').replace(/^\/+/, '')
+  if (!rel || rel.includes('..')) return ''
+  return rel
+}
+
+function parseLibraryFileRef(scope: SessionScope, raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const v = raw.trim()
+  if (!v) return null
+  const prefix = `@/libraries/${scope.libraryId}/`
+  if (!v.startsWith(prefix)) return null
+  const rel = v.slice(prefix.length).replaceAll('\\', '/').replace(/^\/+/, '')
+  if (!rel || rel.includes('..')) return null
+  return rel
+}
+
+function isLikelyBinary(buf: Uint8Array): boolean {
+  const sample = buf.subarray(0, Math.min(buf.length, 4096))
+  for (const b of sample) {
+    if (b === 0) return true
+  }
+  return false
+}
+
 // Create a default session if none exists (for legacy /chat compatibility)
-async function ensureDefaultSession(): Promise<string> {
-  const sessions = manager.list()
+async function ensureDefaultSession(scope: SessionScope): Promise<string> {
+  const sessions = manager.list(scope)
   if (sessions.length > 0) return sessions[0].id
-  const s = await manager.create()
+  const s = await manager.create(scope)
   return s.id
 }
 
@@ -176,12 +275,13 @@ Bun.serve({
 
     // ── Health ────────────────────────────────────────────────────────────────
     if (path === '/health' && req.method === 'GET') {
-      const list = manager.list()
       return json({
         status: 'ok',
         version: '0.3.0',
-        sessions: list.length,
-        sessionCount: list.length,
+        sessions: dbCountAllSessions(),
+        sessionCount: dbCountAllSessions(),
+        // RS-10 explicit status for MCP filesystem root handling.
+        mcpRootMode: 'deferred',
         uptimeMs: Date.now() - startedAt,
       })
     }
@@ -258,9 +358,31 @@ Bun.serve({
       })
     }
 
-    // ── List Space vaults (filesystem under ~/.kyberkit/spaces) ───────────────
+    // ── Rev3: Space list from registry (UUID Space ↔ Library) ────────────────
     if (path === '/spaces' && req.method === 'GET') {
-      return json(listDiscoveredSpaces())
+      return json(listRegistrySpaces())
+    }
+
+    // ── Bootstrap first Space + Library + mount (onboarding) ───────────────────
+    if (path === '/registry/bootstrap' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({})) as {
+        mountPath?: string
+        displayName?: string
+      }
+      const created = createSpaceLibraryBinding(body)
+      if (!created.ok) return json({ error: created.error }, created.status)
+      return json(created.payload)
+    }
+
+    // ── Create additional Space + Library + mount (post-onboarding) ───────────
+    if (path === '/registry/spaces' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({})) as {
+        mountPath?: string
+        displayName?: string
+      }
+      const created = createSpaceLibraryBinding(body)
+      if (!created.ok) return json({ error: created.error }, created.status)
+      return json(created.payload, 201)
     }
 
     // ── Connectors status (live aggregation) ──────────────────────────────────
@@ -270,18 +392,58 @@ Bun.serve({
 
     // ── Space docs tree (sidebar library) ─────────────────────────────────────
     if (path === '/library/tree' && req.method === 'GET') {
-      const spaceId = url.searchParams.get('space_id')?.trim() || 'default'
-      return json(listSpaceDocsTree(spaceId))
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      try {
+        return json(listSpaceDocsTree(scope.scope.spaceId))
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return json({ error: msg }, 500)
+      }
+    }
+
+    // ── Library file preview (text) ───────────────────────────────────────────
+    if (path === '/library/file' && req.method === 'GET') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const rel = parseLibraryFileRef(scope.scope, url.searchParams.get('path'))
+      if (!rel) return json({ error: 'path is required and must be a library ref path' }, 400)
+      const abs = resolvePath(scope.scope.mountPath, rel)
+      if (!abs.startsWith(resolvePath(scope.scope.mountPath))) {
+        return json({ error: 'path escapes library root' }, 400)
+      }
+      try {
+        const st = statSync(abs)
+        if (!st.isFile()) return json({ error: 'not a file' }, 400)
+        if (st.size > MAX_PREVIEW_BYTES) {
+          return json(
+            { error: 'preview_unsupported', reason: 'too_large', size: st.size, maxSize: MAX_PREVIEW_BYTES },
+            413,
+          )
+        }
+        const raw = readFileSync(abs)
+        if (isLikelyBinary(raw)) {
+          return json({ error: 'preview_unsupported', reason: 'binary', size: st.size }, 415)
+        }
+        const content = raw.toString('utf-8')
+        return json({ path: url.searchParams.get('path'), content })
+      } catch {
+        return json({ error: 'preview_unsupported', reason: 'unreadable' }, 415)
+      }
     }
 
     // ── List sessions ─────────────────────────────────────────────────────────
     if (path === '/sessions' && req.method === 'GET') {
-      return json(manager.list())
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      return json(manager.list(scope.scope))
     }
 
     // ── Create session ────────────────────────────────────────────────────────
     if (path === '/sessions' && req.method === 'POST') {
-      const meta = await manager.create()
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const meta = await manager.create(scope.scope)
       return json(meta, 201)
     }
 
@@ -291,11 +453,13 @@ Bun.serve({
       const sessionId = sessionDetailMatch[1]
 
       if (req.method === 'GET') {
-        const sessions = manager.list()
+        const scope = resolveScopeFromUrl(url)
+        if (!scope.scope) return json({ error: scope.error }, scope.status)
+        const sessions = manager.list(scope.scope)
         const meta = sessions.find((s) => s.id === sessionId)
         if (!meta) return json({ error: 'Session not found' }, 404)
-        const artifact = manager.getArtifact(sessionId)
-        const messages = dbListChatMessages(sessionId).map((m) => ({
+        const artifact = manager.getArtifact(scope.scope, sessionId)
+        const messages = dbListChatMessages(scope.scope.libraryId, sessionId).map((m) => ({
           id: m.id,
           role: m.role,
           content: m.content,
@@ -304,7 +468,10 @@ Bun.serve({
       }
 
       if (req.method === 'DELETE') {
-        await manager.delete(sessionId)
+        const scope = resolveScopeFromUrl(url)
+        if (!scope.scope) return json({ error: scope.error }, scope.status)
+        const removed = await manager.delete(scope.scope, sessionId)
+        if (!removed) return json({ error: 'Session not found' }, 404)
         return json({ ok: true })
       }
     }
@@ -314,20 +481,23 @@ Bun.serve({
     const isChatLegacy = path === '/chat' && req.method === 'POST'
 
     if ((messagesMatch && req.method === 'POST') || isChatLegacy) {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
       let sessionId: string
       if (isChatLegacy) {
-        sessionId = await ensureDefaultSession()
+        sessionId = await ensureDefaultSession(scope.scope)
       } else {
-        sessionId = messagesMatch![1]
+        sessionId = messagesMatch?.[1] ?? ''
       }
 
       const body = await req.json().catch(() => ({ message: '' }))
       const userMessage: string = body.message || ''
+      const selectedLibraryDir = parseSelectedLibraryDirRef(scope.scope, body.selectedLibraryDir)
       if (!userMessage.trim()) {
         return json({ error: 'message is required and must be non-empty' }, 400)
       }
 
-      const session = await manager.getSession(sessionId)
+      const session = await manager.getSession(scope.scope, sessionId)
       if (!session) return json({ error: 'Session not found' }, 404)
 
       // Reject concurrent sends to same session (would corrupt agent state)
@@ -338,10 +508,10 @@ Bun.serve({
       console.log(`[Sidecar] [${sessionId.slice(0, 8)}] → "${userMessage.slice(0, 60)}"`)
 
       // Auto-title on first message
-      const sessions = manager.list()
+      const sessions = manager.list(scope.scope)
       const meta = sessions.find((s) => s.id === sessionId)
       if (meta?.title === 'New Session' && userMessage.trim()) {
-        manager.autoTitle(sessionId, userMessage)
+        manager.autoTitle(scope.scope, sessionId, userMessage)
       }
 
       const parser = new ArtifactParser()
@@ -362,6 +532,8 @@ Bun.serve({
               // Client disconnected
             }
           }
+          const asRecord = (value: unknown): Record<string, unknown> =>
+            (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
           const unsubscribeSpaceEvents = spaceEventBroadcaster.subscribe((event) => {
             emit(event)
           })
@@ -383,15 +555,18 @@ Bun.serve({
                   } else if (e.type === 'artifact_end') {
                     inArtifact = false
                     const summary = summarizeArtifactMarkdown(artifactAccum)
+                    const saved = manager.saveArtifact(scope.scope, sessionId, artifactAccum, selectedLibraryDir)
                     emit({
                       type: 'artifact_end',
                       sessionId,
                       artifact_id: currentArtifactId,
                       summary,
+                      library_path: saved ? `@/libraries/${scope.scope.libraryId}/${saved.relativePath}` : null,
                     })
-                    // Persist artifact to DB
-                    manager.saveArtifact(sessionId, artifactAccum)
-                    emit({ type: 'session_updated', session: manager.list().find((s) => s.id === sessionId) })
+                    emit({
+                      type: 'session_updated',
+                      session: manager.list(scope.scope).find((s) => s.id === sessionId),
+                    })
                     currentArtifactId = null
                   } else if (e.type === 'text_delta') {
                     assistantPlain += e.text
@@ -399,17 +574,28 @@ Bun.serve({
                   }
                 }
               } else if (event.type === 'tool_use_start') {
-                emit({ type: 'tool_use_start', toolName: (event as any).toolName || 'tool' })
+                const payload = asRecord(event)
+                emit({ type: 'tool_use_start', toolName: String(payload.toolName ?? 'tool') })
               } else if (event.type === 'tool_result') {
-                emit({ type: 'tool_result', toolName: (event as any).toolName || 'tool', success: !(event as any).isError })
+                const payload = asRecord(event)
+                emit({
+                  type: 'tool_result',
+                  toolName: String(payload.toolName ?? 'tool'),
+                  success: !Boolean(payload.isError),
+                })
               } else if (event.type === 'task_narration') {
-                emit({ type: 'task_narration', text: (event as any).text || '' })
+                const payload = asRecord(event)
+                emit({ type: 'task_narration', text: String(payload.text ?? '') })
               } else if (event.type === 'turn_complete') {
-                emit({ type: 'turn_complete', turnNumber: (event as any).turnNumber })
+                const payload = asRecord(event)
+                emit({ type: 'turn_complete', turnNumber: payload.turnNumber })
               } else if (event.type === 'error') {
-                emit({ type: 'error', error: { message: (event as any).error?.message || 'Unknown error' } })
+                const payload = asRecord(event)
+                const err = asRecord(payload.error)
+                emit({ type: 'error', error: { message: String(err.message ?? 'Unknown error') } })
               } else if (event.type === 'status') {
-                emit({ type: 'status', status: (event as any).status, message: (event as any).message })
+                const payload = asRecord(event)
+                emit({ type: 'status', status: payload.status, message: payload.message })
               }
             }
 
@@ -426,14 +612,18 @@ Bun.serve({
                 emit({ type: 'artifact_delta', text: e.text })
               } else if (e.type === 'artifact_end') {
                 inArtifact = false
+                const saved = manager.saveArtifact(scope.scope, sessionId, artifactAccum, selectedLibraryDir)
                 emit({
                   type: 'artifact_end',
                   sessionId,
                   artifact_id: currentArtifactId,
                   summary: summarizeArtifactMarkdown(artifactAccum),
+                  library_path: saved ? `@/libraries/${scope.scope.libraryId}/${saved.relativePath}` : null,
                 })
-                manager.saveArtifact(sessionId, artifactAccum)
-                emit({ type: 'session_updated', session: manager.list().find((s) => s.id === sessionId) })
+                emit({
+                  type: 'session_updated',
+                  session: manager.list(scope.scope).find((s) => s.id === sessionId),
+                })
                 currentArtifactId = null
               } else if (e.type === 'text_delta') {
                 assistantPlain += e.text
@@ -446,14 +636,18 @@ Bun.serve({
             // If stream ended while still inside <artifact> (no closing tag), close once
             if (inArtifact) {
               inArtifact = false
-              manager.saveArtifact(sessionId, artifactAccum)
+              const saved = manager.saveArtifact(scope.scope, sessionId, artifactAccum, selectedLibraryDir)
               emit({
                 type: 'artifact_end',
                 sessionId,
                 artifact_id: currentArtifactId,
                 summary: summarizeArtifactMarkdown(artifactAccum),
+                library_path: saved ? `@/libraries/${scope.scope.libraryId}/${saved.relativePath}` : null,
               })
-              emit({ type: 'session_updated', session: manager.list().find((s) => s.id === sessionId) })
+              emit({
+                type: 'session_updated',
+                session: manager.list(scope.scope).find((s) => s.id === sessionId),
+              })
               currentArtifactId = null
             }
 
@@ -465,7 +659,7 @@ Bun.serve({
             unsubscribeSpaceEvents()
             if (userMessage.trim()) {
               try {
-                dbPersistChatTurn(sessionId, userMessage, assistantPlain)
+                dbPersistChatTurn(scope.scope.libraryId, sessionId, userMessage, assistantPlain)
               } catch (persistErr) {
                 console.error('[Sidecar] Failed to persist chat turn:', persistErr)
               }

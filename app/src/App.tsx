@@ -29,7 +29,10 @@ function KevinGate() {
     )
   }
 
-  const needsOnboarding = !config?.onboardingComplete || !config?.user.apiKeyConfigured
+  const needsOnboarding =
+    !config?.user.apiKeyConfigured ||
+    !config?.libraryConfigured ||
+    !config?.onboardingComplete
 
   if (needsOnboarding) {
     return <OnboardingWizard onComplete={refresh} />

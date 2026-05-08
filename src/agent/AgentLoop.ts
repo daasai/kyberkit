@@ -75,6 +75,8 @@ export interface AgentLoopDeps {
   permissionContractProvider?: () => TaskPermissionContract | undefined;
   /** 3.0 P0.5: input-side prompt-injection checker for ToolDispatcherMiddleware. */
   outputGuardChecker?: OutputGuardChecker;
+  /** Kevin Rev3: session-level logical cwd (Library mount). */
+  executionCwd?: string;
 }
 
 
@@ -165,9 +167,10 @@ export async function* agentLoop(
 
     const userTurnText = extractLatestNaturalUserText(agent.messages as any);
     const skillMetas = tools.listSkillMetas?.() ?? [];
+    const effectiveCwd = deps.executionCwd ?? process.cwd();
     const active = discoverActiveSkills(skillMetas, {
       userText: userTurnText,
-      cwd: process.cwd(),
+      cwd: effectiveCwd,
     });
     const skillContext = active.map((m) => `## ${m.name}\n${m.body}`).join('\n\n');
 
@@ -177,7 +180,7 @@ export async function* agentLoop(
       const assembled = await deps.promptAssembler.assemble({
         budget: 30000,
         platformDirective: deps.platformDirective,
-        cwd: process.cwd(),
+        cwd: effectiveCwd,
         tools: toolRowsForPrompt,
         memoryContext,
         assets: deps.workspace?.assets?.getManifest?.() || undefined,

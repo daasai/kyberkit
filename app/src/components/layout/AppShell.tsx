@@ -10,11 +10,11 @@ import { NotificationCenter } from '../notifications/NotificationCenter'
 import { GlobalSearchView } from '../search/GlobalSearchView'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
-import { SIDECAR_URL } from '../../config/sidecarUrl'
+import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
 import { useDynamicIslandState, type IslandEvent } from '../../hooks/useDynamicIslandState'
 
 function ArtifactAutoLoader() {
-  const { activeSessionId } = useSession()
+  const { activeSessionId, spaceId } = useSession()
   const { loadArtifact, clearArtifact, artifact } = useArtifact()
   const loadedFor = useRef<string | null>(null)
   const activeIdRef = useRef<string | null>(null)
@@ -27,7 +27,7 @@ function ArtifactAutoLoader() {
     if (artifact.streaming) return
 
     const sid = activeSessionId
-    fetch(`${SIDECAR_URL}/sessions/${sid}`)
+    fetch(`${SIDECAR_URL}/sessions/${sid}${qsSpace(spaceId)}`)
       .then(r => r.json())
       .then(data => {
         if (activeIdRef.current !== sid) return
@@ -39,7 +39,7 @@ function ArtifactAutoLoader() {
         }
       })
       .catch(() => { /* Sidecar not ready */ })
-  }, [activeSessionId, artifact.streaming, loadArtifact, clearArtifact])
+  }, [activeSessionId, spaceId, artifact.streaming, loadArtifact, clearArtifact])
 
   return null
 }

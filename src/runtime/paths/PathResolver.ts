@@ -9,10 +9,24 @@ import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, statSy
 
 const DEFAULT_USER_ID = 'default'
 
+/** RFC 4122 UUID v1–v5 string form (lowercase hex with dashes). */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+export function isUuidString(value: string): boolean {
+  return UUID_RE.test(value.trim())
+}
+
 export function kyberHome(): string {
   const raw = process.env.KYBER_HOME?.trim()
   if (raw) return raw
   return join(homedir(), '.kyberkit')
+}
+
+export function kevinNodeRoot(): string {
+  const raw = process.env.KEVIN_NODE_ROOT?.trim()
+  if (raw) return raw
+  return join(homedir(), '.kyberkit', 'kevin')
 }
 
 export function globalSkillsDir(): string {
@@ -45,6 +59,18 @@ export function userTemplatesDir(userId: string = DEFAULT_USER_ID): string {
 
 export function userAuditDir(userId: string = DEFAULT_USER_ID): string {
   return join(userRoot(userId), 'audit')
+}
+
+export function kevinRegistryDir(): string {
+  return join(kevinNodeRoot(), 'registry')
+}
+
+export function kevinSpaceLibraryRegistryPath(): string {
+  return join(kevinRegistryDir(), 'space-library-map.json')
+}
+
+export function libraryTechRoot(libraryId: string): string {
+  return join(kevinNodeRoot(), `lib-${libraryId}`)
 }
 
 /** Cron job definitions for {@link CronEngine} — JSON array of `{ id, space_id, cron, skill_name }`. */
@@ -92,6 +118,16 @@ export function ensureTierLayout(userId: string = DEFAULT_USER_ID): void {
   }
 }
 
+/**
+ * Ensures Rev3 Kevin layout roots under ${KEVIN_NODE_ROOT}.
+ */
+export function ensureKevinLayout(): void {
+  const dirs = [kevinNodeRoot(), kevinRegistryDir()]
+  for (const d of dirs) {
+    mkdirSync(d, { recursive: true })
+  }
+}
+
 /** Ensures Tier 3 dirs for one Space (docs + skills + parents). */
 export function ensureSpaceTier(spaceId: string): void {
   mkdirSync(spaceDocsDir(spaceId), { recursive: true })
@@ -130,6 +166,15 @@ export function writeProfile(
 export interface SpaceListEntry {
   id: string
   label: string
+  libraryId?: string
+  mountPath?: string
+}
+
+export interface SpaceLibraryBinding {
+  spaceId: string
+  libraryId: string
+  mountPath: string
+  displayName?: string
 }
 
 export interface SpaceDocTreeNode {
@@ -144,33 +189,86 @@ function spaceDisplayLabel(spaceId: string): string {
   return spaceId
 }
 
+export function readSpaceLibraryRegistry(): SpaceLibraryBinding[] {
+  ensureKevinLayout()
+  const p = kevinSpaceLibraryRegistryPath()
+  if (!existsSync(p)) return []
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf-8')) as unknown
+    if (!Array.isArray(raw)) return []
+    return raw
+      .filter((row): row is SpaceLibraryBinding => {
+        if (!row || typeof row !== 'object') return false
+        const r = row as Partial<SpaceLibraryBinding>
+        return Boolean(r.spaceId && r.libraryId && r.mountPath)
+      })
+      .map((row) => ({
+        spaceId: row.spaceId.trim(),
+        libraryId: row.libraryId.trim(),
+        mountPath: row.mountPath.trim(),
+        displayName: row.displayName?.trim(),
+      }))
+  } catch {
+    return []
+  }
+}
+
+function writeSpaceLibraryRegistry(rows: SpaceLibraryBinding[]): void {
+  ensureKevinLayout()
+  writeFileSync(kevinSpaceLibraryRegistryPath(), JSON.stringify(rows, null, 2), 'utf-8')
+}
+
+export function upsertSpaceLibraryBinding(binding: SpaceLibraryBinding): void {
+  const sid = binding.spaceId.trim()
+  const lid = binding.libraryId.trim()
+  if (!isUuidString(sid) || !isUuidString(lid)) {
+    throw new Error('spaceId and libraryId must be UUIDs')
+  }
+  const next: SpaceLibraryBinding = {
+    spaceId: sid,
+    libraryId: lid,
+    mountPath: binding.mountPath.trim(),
+    displayName: binding.displayName?.trim(),
+  }
+  const rows = readSpaceLibraryRegistry()
+  const filtered = rows.filter((row) => row.spaceId !== next.spaceId && row.libraryId !== next.libraryId)
+  filtered.push(next)
+  writeSpaceLibraryRegistry(filtered)
+}
+
+export function resolveSpaceToLibrary(spaceId: string): SpaceLibraryBinding | null {
+  const key = spaceId.trim()
+  if (!key) return null
+  const rows = readSpaceLibraryRegistry()
+  return rows.find((row) => row.spaceId === key) ?? null
+}
+
+export function resolveLibraryMountPath(libraryId: string): string | null {
+  const key = libraryId.trim()
+  if (!key) return null
+  const rows = readSpaceLibraryRegistry()
+  return rows.find((row) => row.libraryId === key)?.mountPath ?? null
+}
+
 /**
- * Lists Space vault ids under ~/.kyberkit/spaces (one directory per Space).
- * Always includes `default` even before first explicit folder creation.
+ * Rev3: Spaces exposed to the app come only from the Space–Library registry (UUID ids).
+ */
+export function listRegistrySpaces(): SpaceListEntry[] {
+  const rows = readSpaceLibraryRegistry()
+  const sorted = [...rows].sort((a, b) => a.spaceId.localeCompare(b.spaceId))
+  return sorted.map((row) => ({
+    id: row.spaceId,
+    label: row.displayName?.trim() || row.spaceId.slice(0, 8) + '…',
+    libraryId: row.libraryId,
+    mountPath: row.mountPath,
+  }))
+}
+
+/**
+ * @deprecated Legacy discovery under ~/.kyberkit/spaces; prefer {@link listRegistrySpaces} for Kevin desktop.
  */
 export function listDiscoveredSpaces(): SpaceListEntry[] {
-  const root = join(kyberHome(), 'spaces')
-  mkdirSync(root, { recursive: true })
-  const ids = new Set<string>(['default'])
-  try {
-    for (const name of readdirSync(root)) {
-      if (name.startsWith('.')) continue
-      const p = join(root, name)
-      try {
-        if (statSync(p).isDirectory()) ids.add(name)
-      } catch {
-        /* skip broken entries */
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  const sorted = [...ids].sort((a, b) => {
-    if (a === 'default') return -1
-    if (b === 'default') return 1
-    return a.localeCompare(b)
-  })
-  return sorted.map((id) => ({ id, label: spaceDisplayLabel(id) }))
+  return listRegistrySpaces()
 }
 
 function toRefPath(spaceId: string, relPath: string): string {
@@ -178,15 +276,7 @@ function toRefPath(spaceId: string, relPath: string): string {
   return `@/spaces/${spaceId}/docs/${normalized}`
 }
 
-/**
- * Lists tree nodes under one Space docs root.
- * The root path is always `spaceDocsDir(spaceId)` and children are sorted as:
- * directories first, then files; both alphabetically.
- */
-export function listSpaceDocsTree(spaceId: string): SpaceDocTreeNode[] {
-  const root = spaceDocsDir(spaceId)
-  mkdirSync(root, { recursive: true })
-
+function walkTree(absRoot: string, toPath: (relPath: string) => string): SpaceDocTreeNode[] {
   const walk = (absDir: string, relDir: string): SpaceDocTreeNode[] => {
     const dirs: SpaceDocTreeNode[] = []
     const files: SpaceDocTreeNode[] = []
@@ -203,14 +293,14 @@ export function listSpaceDocsTree(spaceId: string): SpaceDocTreeNode[] {
       if (isDir) {
         dirs.push({
           name,
-          path: toRefPath(spaceId, rel),
+          path: toPath(rel),
           kind: 'dir',
           children: walk(abs, rel),
         })
       } else {
         files.push({
           name,
-          path: toRefPath(spaceId, rel),
+          path: toPath(rel),
           kind: 'file',
         })
       }
@@ -220,6 +310,24 @@ export function listSpaceDocsTree(spaceId: string): SpaceDocTreeNode[] {
     files.sort(byName)
     return [...dirs, ...files]
   }
+  return walk(absRoot, '')
+}
 
-  return walk(root, '')
+function toLibraryRefPath(libraryId: string, relPath: string): string {
+  const normalized = relPath.replaceAll('\\', '/').replace(/^\/+/, '')
+  return `@/libraries/${libraryId}/${normalized}`
+}
+
+/**
+ * Lists tree nodes under the Library mount for this Space (Rev3).
+ * Requires a registry binding; no legacy ~/.kyberkit/spaces/.../docs fallback.
+ */
+export function listSpaceDocsTree(spaceId: string): SpaceDocTreeNode[] {
+  const binding = resolveSpaceToLibrary(spaceId)
+  if (!binding) {
+    throw new Error(`No library binding for space ${spaceId}`)
+  }
+  const root = binding.mountPath
+  mkdirSync(root, { recursive: true })
+  return walkTree(root, (rel) => toLibraryRefPath(binding.libraryId, rel))
 }

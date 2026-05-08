@@ -1,23 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { LeftSidebar, connectorSummary, sortConnectors } from './LeftSidebar'
 import { useSession } from '../../contexts/SessionContext'
+import { useArtifact } from '../../contexts/ArtifactContext'
 
 vi.mock('../../contexts/SessionContext', () => ({
   useSession: vi.fn(),
 }))
 
 vi.mock('../../contexts/ArtifactContext', () => ({
-  useArtifact: () => ({ clearArtifact: vi.fn() }),
+  useArtifact: vi.fn(),
 }))
 
 const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString()
 
+const SPACE_A = 'a0000000-0000-4000-8000-000000000001'
+const SPACE_B = 'b0000000-0000-4000-8000-000000000002'
+
 function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {}) {
   return {
-    spaceId: 'default',
+    spaceId: SPACE_A,
     setSpaceId: vi.fn(),
-    spaces: [{ id: 'default', label: '默认 Space' }],
+    spaces: [{ id: SPACE_A, label: '默认 Space' }],
     refreshSpaces: vi.fn().mockResolvedValue(undefined),
     sessions: [
       { id: 's1', title: 'Chat One', createdAt: iso(120_000), updatedAt: iso(60_000) },
@@ -28,12 +32,17 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
     createSession: vi.fn(async () => 'new'),
     deleteSession: vi.fn(async () => {}),
     refreshSessions: vi.fn(async () => {}),
+    createSpaceLibrary: vi.fn(async () => ({ id: SPACE_A, label: '默认 Space' })),
     openSpaceInNewWindow: vi.fn(async () => 'focused' as const),
     ...overrides,
   } as ReturnType<typeof useSession>
 }
 
 beforeEach(() => {
+  vi.mocked(useArtifact).mockReturnValue({
+    clearArtifact: vi.fn(),
+    loadArtifact: vi.fn(),
+  } as ReturnType<typeof useArtifact>)
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })) as unknown as typeof fetch)
 })
 
@@ -90,18 +99,18 @@ describe('document library in sidebar', () => {
   it('loads tree by current space and truncates long names', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url.includes('/library/tree') && url.includes('space_id=beta')) {
+      if (url.includes('/library/tree') && url.includes(`space_id=${SPACE_B}`)) {
         return {
           ok: true,
           json: async () => ([
             {
               name: 'docs',
-              path: '@/spaces/default/docs/docs',
+              path: '@/libraries/lib-1/docs',
               kind: 'dir',
               children: [
                 {
                   name: 'this-is-a-very-very-long-file-name-for-sidebar-overflow-check.md',
-                  path: '@/spaces/default/docs/docs/this-is-a-very-very-long-file-name-for-sidebar-overflow-check.md',
+                  path: '@/libraries/lib-1/docs/this-is-a-very-very-long-file-name-for-sidebar-overflow-check.md',
                   kind: 'file',
                 },
               ],
@@ -112,15 +121,65 @@ describe('document library in sidebar', () => {
       return { ok: false, json: async () => [] } as Response
     })
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
-    vi.mocked(useSession).mockReturnValue(baseSessionMock({ spaceId: 'beta' }))
+    vi.mocked(useSession).mockReturnValue(baseSessionMock({ spaceId: SPACE_B }))
 
     render(<LeftSidebar />)
     const longName = await screen.findByText('this-is-a-very-very-long-file-name-for-sidebar-overflow-check.md')
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/library/tree?space_id=beta'))
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining(`/library/tree?space_id=${SPACE_B}`))
     expect(longName).toHaveStyle({
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
       overflow: 'hidden',
+    })
+  })
+
+  it('shows friendly preview unsupported message for large/binary files', async () => {
+    const loadArtifact = vi.fn()
+    vi.mocked(useArtifact).mockReturnValue({
+      clearArtifact: vi.fn(),
+      loadArtifact,
+    } as ReturnType<typeof useArtifact>)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/library/tree') && url.includes(`space_id=${SPACE_B}`)) {
+        return {
+          ok: true,
+          json: async () => ([
+            {
+              name: 'docs',
+              path: '@/libraries/lib-1/docs',
+              kind: 'dir',
+              children: [
+                {
+                  name: 'big.bin',
+                  path: '@/libraries/lib-1/docs/big.bin',
+                  kind: 'file',
+                },
+              ],
+            },
+          ]),
+        } as Response
+      }
+      if (url.includes('/library/file') && url.includes(`space_id=${SPACE_B}`)) {
+        return {
+          ok: false,
+          status: 413,
+          json: async () => ({ reason: 'too_large', size: 8 * 1024 * 1024, maxSize: 5 * 1024 * 1024 }),
+        } as Response
+      }
+      return { ok: false, json: async () => ({}) } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    vi.mocked(useSession).mockReturnValue(baseSessionMock({ spaceId: SPACE_B, activeSessionId: 's1' }))
+
+    render(<LeftSidebar />)
+    fireEvent.click(await screen.findByText('big.bin'))
+
+    await waitFor(() => {
+      expect(loadArtifact).toHaveBeenCalled()
+      const lastCall = loadArtifact.mock.calls.at(-1)
+      expect(String(lastCall?.[1] ?? '')).toContain('文件预览不可用')
+      expect(String(lastCall?.[1] ?? '')).toContain('超过预览上限')
     })
   })
 })

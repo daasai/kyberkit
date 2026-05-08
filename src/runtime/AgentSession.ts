@@ -24,6 +24,7 @@ import type { MiddlewarePipeline } from '../agent/StreamMiddleware.js';
 import type { SkillSuggestionRunner } from '../skills/SkillSuggestionRunner.js';
 import type { LearningLoopMiddleware } from '../learning/LearningLoopMiddleware.js';
 import type { AssetRecord } from '../types/turn-summary.js';
+import type { AgentExecutionContext } from './AgentExecutionContext.js';
 
 // ─── Public API Types ────────────────────────────────────────────────────────
 
@@ -62,6 +63,12 @@ export interface CreateSessionOptions {
    * When provided, supersedes `skillSuggestion` for post-task learning.
    */
   learningLoop?: LearningLoopMiddleware;
+
+  /**
+   * Kevin Rev3: per-session sandbox cwd + allowed roots from Library mount (strategy A).
+   * When set, runtime forks sandbox and rebuilds builtin tools for this session only.
+   */
+  agentExecution?: AgentExecutionContext;
 }
 
 export interface ReliabilityBuildConfig {
@@ -222,7 +229,7 @@ export class AgentSession {
     if (cmdRegistry?.isCommand(input)) {
       const result = await cmdRegistry.execute(input, {
         cumulative: { ...this._cumulative },
-        cwd: process.cwd(),
+        cwd: this.deps.executionCwd ?? process.cwd(),
         assets: this.deps.workspace?.assets?.getManifest?.() ?? undefined,
         agentId: this.agent.id,
       });
