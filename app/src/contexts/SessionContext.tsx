@@ -12,6 +12,11 @@ import { openAndFocusSpace, type SpaceSwitchOutcome } from '../lib/tauriSpace'
 
 const SPACE_STORAGE_KEY = 'kevin:active-space-id'
 
+export interface SpaceMeta {
+  id: string
+  label: string
+}
+
 function readInitialSpaceId(): string {
   try {
     if (typeof window !== 'undefined') {
@@ -37,19 +42,23 @@ export interface SessionMeta {
 interface SessionContextType {
   spaceId: string
   setSpaceId: (id: string) => void
+  spaces: SpaceMeta[]
+  refreshSpaces: () => Promise<void>
   sessions: SessionMeta[]
   activeSessionId: string | null
   setActiveSessionId: (id: string) => void
   createSession: () => Promise<string>
   deleteSession: (id: string) => Promise<void>
   refreshSessions: () => Promise<void>
-  switchToSessionSpace: (id: string) => Promise<SpaceSwitchOutcome>
+  /** Opens another Space in a separate window (Tauri) or tab (browser); does not change current window's spaceId. */
+  openSpaceInNewWindow: (spaceId: string) => Promise<SpaceSwitchOutcome>
 }
 
 const SessionContext = createContext<SessionContextType | null>(null)
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [spaceId, setSpaceIdState] = useState<string>(readInitialSpaceId)
+  const [spaces, setSpaces] = useState<SpaceMeta[]>([])
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   /** Always latest id for polling — avoids stale closure resetting selection every interval. */
@@ -75,15 +84,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } catch {
       // Sidecar not running yet
     }
+  }, [spaceId])
+
+  const refreshSpaces = useCallback(async () => {
+    try {
+      const res = await fetch(`${SIDECAR_URL}/spaces`)
+      if (!res.ok) {
+        setSpaces([{ id: 'default', label: '默认 Space' }])
+        return
+      }
+      const data = (await res.json()) as SpaceMeta[]
+      const next =
+        Array.isArray(data) && data.length > 0
+          ? data
+          : [{ id: 'default', label: '默认 Space' }]
+      setSpaces(next)
+    } catch {
+      setSpaces([{ id: 'default', label: '默认 Space' }])
+    }
   }, [])
 
   const createSession = useCallback(async (): Promise<string> => {
-    const res = await fetch(`${SIDECAR_URL}/sessions`, { method: 'POST' })
+    const res = await fetch(`${SIDECAR_URL}/sessions${qsSpace(spaceId)}`, { method: 'POST' })
     const session: SessionMeta = await res.json()
     setSessions(prev => [session, ...prev])
     setActiveSessionId(session.id)
     return session.id
-  }, [])
+  }, [spaceId])
 
   const deleteSession = useCallback(async (id: string) => {
     await fetch(`${SIDECAR_URL}/sessions/${id}`, { method: 'DELETE' })
@@ -96,29 +123,22 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const switchToSessionSpace = useCallback(async (id: string): Promise<SpaceSwitchOutcome> => {
-    const current = activeSessionIdRef.current
-    if (current === id) return 'noop'
-    const ok = await openAndFocusSpace(id)
+  const openSpaceInNewWindow = useCallback(async (targetSpaceId: string): Promise<SpaceSwitchOutcome> => {
+    const ok = await openAndFocusSpace(targetSpaceId)
     return ok ? 'focused' : 'failed'
   }, [])
 
-  // Deep link: ?space=<sessionId> (e.g. second window from A1 switch)
   useEffect(() => {
-    try {
-      const sid = new URLSearchParams(window.location.search).get('space')
-      if (sid) {
-        setActiveSessionId(sid)
-        activeSessionIdRef.current = sid
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [])
+    void refreshSpaces()
+  }, [refreshSpaces])
+
+  // Refresh when space changes (same dependency chain as polling)
+  useEffect(() => {
+    void refreshSessions()
+  }, [refreshSessions])
 
   // Poll sessions periodically so the sidebar stays fresh
   useEffect(() => {
-    void refreshSessions()
     const interval = setInterval(() => {
       void refreshSessions()
     }, 5000)
@@ -129,13 +149,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     <SessionContext.Provider value={{
       spaceId,
       setSpaceId,
+      spaces,
+      refreshSpaces,
       sessions,
       activeSessionId,
       setActiveSessionId,
       createSession,
       deleteSession,
       refreshSessions,
-      switchToSessionSpace,
+      openSpaceInNewWindow,
     }}>
       {children}
     </SessionContext.Provider>

@@ -5,7 +5,7 @@
 
 import { homedir } from 'os'
 import { join } from 'path'
-import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs'
+import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 
 const DEFAULT_USER_ID = 'default'
 
@@ -125,4 +125,101 @@ export function writeProfile(
   const prev = readProfile(userId)
   const next = { ...prev, ...patch }
   writeFileSync(userProfilePath(userId), JSON.stringify(next, null, 2), 'utf-8')
+}
+
+export interface SpaceListEntry {
+  id: string
+  label: string
+}
+
+export interface SpaceDocTreeNode {
+  name: string
+  path: string
+  kind: 'file' | 'dir'
+  children?: SpaceDocTreeNode[]
+}
+
+function spaceDisplayLabel(spaceId: string): string {
+  if (spaceId === 'default') return '默认 Space'
+  return spaceId
+}
+
+/**
+ * Lists Space vault ids under ~/.kyberkit/spaces (one directory per Space).
+ * Always includes `default` even before first explicit folder creation.
+ */
+export function listDiscoveredSpaces(): SpaceListEntry[] {
+  const root = join(kyberHome(), 'spaces')
+  mkdirSync(root, { recursive: true })
+  const ids = new Set<string>(['default'])
+  try {
+    for (const name of readdirSync(root)) {
+      if (name.startsWith('.')) continue
+      const p = join(root, name)
+      try {
+        if (statSync(p).isDirectory()) ids.add(name)
+      } catch {
+        /* skip broken entries */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  const sorted = [...ids].sort((a, b) => {
+    if (a === 'default') return -1
+    if (b === 'default') return 1
+    return a.localeCompare(b)
+  })
+  return sorted.map((id) => ({ id, label: spaceDisplayLabel(id) }))
+}
+
+function toRefPath(spaceId: string, relPath: string): string {
+  const normalized = relPath.replaceAll('\\', '/').replace(/^\/+/, '')
+  return `@/spaces/${spaceId}/docs/${normalized}`
+}
+
+/**
+ * Lists tree nodes under one Space docs root.
+ * The root path is always `spaceDocsDir(spaceId)` and children are sorted as:
+ * directories first, then files; both alphabetically.
+ */
+export function listSpaceDocsTree(spaceId: string): SpaceDocTreeNode[] {
+  const root = spaceDocsDir(spaceId)
+  mkdirSync(root, { recursive: true })
+
+  const walk = (absDir: string, relDir: string): SpaceDocTreeNode[] => {
+    const dirs: SpaceDocTreeNode[] = []
+    const files: SpaceDocTreeNode[] = []
+    for (const name of readdirSync(absDir)) {
+      if (name.startsWith('.')) continue
+      const abs = join(absDir, name)
+      let isDir = false
+      try {
+        isDir = statSync(abs).isDirectory()
+      } catch {
+        continue
+      }
+      const rel = relDir ? `${relDir}/${name}` : name
+      if (isDir) {
+        dirs.push({
+          name,
+          path: toRefPath(spaceId, rel),
+          kind: 'dir',
+          children: walk(abs, rel),
+        })
+      } else {
+        files.push({
+          name,
+          path: toRefPath(spaceId, rel),
+          kind: 'file',
+        })
+      }
+    }
+    const byName = (a: SpaceDocTreeNode, b: SpaceDocTreeNode) => a.name.localeCompare(b.name)
+    dirs.sort(byName)
+    files.sort(byName)
+    return [...dirs, ...files]
+  }
+
+  return walk(root, '')
 }

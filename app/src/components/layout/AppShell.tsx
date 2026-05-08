@@ -7,6 +7,7 @@ import { RightPanel } from './RightPanel'
 import { SkillStore } from '../skill-store/SkillStore'
 import { AutomationCenter } from '../automation/AutomationCenter'
 import { NotificationCenter } from '../notifications/NotificationCenter'
+import { GlobalSearchView } from '../search/GlobalSearchView'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
 import { SIDECAR_URL } from '../../config/sidecarUrl'
@@ -93,6 +94,7 @@ export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {
   const savedSizes = getSavedSizes()
   const { spaceId } = useSession()
   const [centerView, setCenterView] = useState<'editor' | 'skillstore' | 'automation'>('editor')
+  const [searchOpen, setSearchOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
   const [islandEvents, setIslandEvents] = useState<IslandEvent[]>([])
   const islandState = useDynamicIslandState(islandEvents)
@@ -135,7 +137,7 @@ export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {
               <LeftSidebar
                 onOpenSkillStore={() => setCenterView('skillstore')}
                 onOpenAutomation={() => setCenterView('automation')}
-                onOpenSearch={() => setCenterView('editor')}
+                onOpenSearch={() => setSearchOpen(true)}
               />
             </div>
           </Panel>
@@ -143,10 +145,11 @@ export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {
           <ResizeHandle />
 
           <Panel defaultSize={savedSizes[1]} minSize={35}>
-            <div id="kevin-center-panel" style={{ height: '100%', overflow: 'hidden' }}>
+            <div id="kevin-center-panel" style={{ height: '100%', overflow: 'hidden', position: 'relative' }}>
               {centerView === 'editor' && <CenterPanel />}
               {centerView === 'skillstore' && <SkillStore onBack={() => setCenterView('editor')} />}
               {centerView === 'automation' && <AutomationCenter spaceId={spaceId} onBack={() => setCenterView('editor')} />}
+              {searchOpen && <GlobalSearchView onBack={() => setSearchOpen(false)} />}
             </div>
           </Panel>
 

@@ -3,6 +3,7 @@
  *
  * Routes:
  *   GET  /health                       → health check
+ *   GET  /spaces                      → list Space vault ids (under ~/.kyberkit/spaces)
  *   GET  /sessions                     → list all sessions
  *   POST /sessions                     → create new session
  *   GET  /sessions/:id                 → get session details (with artifact)
@@ -21,6 +22,14 @@ import {
   attachSkillSuggestedRuntimeBridge,
   createSpaceEventBroadcaster,
 } from './spaceEventBroadcast.js'
+import { listDiscoveredSpaces, listSpaceDocsTree } from '../src/runtime/paths/PathResolver.js'
+import {
+  loadUserConfig,
+  saveUserConfig,
+  forceApplyUserConfigToEnv,
+} from '../src/runtime/config/UserConfigStore.js'
+import { broadcastConfigChanged, subscribeConfigSse } from './configBroadcast.js'
+import { readProfile, writeProfile } from '../src/runtime/paths/PathResolver.js'
 
 /** Optional dotenv-style file (Tauri sets `KYBERKIT_ENV_FILE` in release). Does not override existing env. */
 async function applyKevinEnvFile(): Promise<void> {
@@ -65,6 +74,49 @@ function json(data: unknown, status = 200): Response {
   })
 }
 
+type ConnectorStatus = {
+  name: string
+  status: 'healthy' | 'error'
+  lastSuccess: string
+  source: 'live'
+}
+
+function listConnectorStatuses(): ConnectorStatus[] {
+  const hasDwConfig = Boolean(
+    process.env.BEEYI_DW_BASE_URL?.trim() &&
+    process.env.BEEYI_DW_TOKEN?.trim()
+  )
+  const canDiscoverSpaces = (() => {
+    try {
+      listDiscoveredSpaces()
+      return true
+    } catch {
+      return false
+    }
+  })()
+
+  return [
+    {
+      name: 'Filesystem MCP',
+      status: canDiscoverSpaces ? 'healthy' : 'error',
+      lastSuccess: canDiscoverSpaces ? '刚刚' : '不可用',
+      source: 'live',
+    },
+    {
+      name: '系统监控 MCP',
+      status: 'healthy',
+      lastSuccess: '刚刚',
+      source: 'live',
+    },
+    {
+      name: '贝易转 DW',
+      status: hasDwConfig ? 'healthy' : 'error',
+      lastSuccess: hasDwConfig ? '刚刚' : '未配置',
+      source: 'live',
+    },
+  ]
+}
+
 console.log('[Kevin Sidecar] Bootstrapping KyberKit Runtime...')
 const runtime = new KyberRuntime()
 await runtime.bootstrap()
@@ -73,6 +125,35 @@ attachSkillSuggestedRuntimeBridge(runtime.getBus(), spaceEventBroadcaster)
 
 const manager = new SessionManager(runtime)
 console.log('[Kevin Sidecar] SessionManager ready.')
+
+const DEFAULT_MODEL = process.env.KYBER_MODEL_NAME?.trim() || 'claude-sonnet-4-20250514'
+
+function modelChoices(defaultModel: string): string[] {
+  const fromEnv = process.env.KYBER_MODEL_LIST
+    ?.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean) ?? []
+  return Array.from(new Set([defaultModel, ...fromEnv]))
+}
+
+function readConfigPayload() {
+  const user = loadUserConfig('default')
+  const profile = readProfile('default')
+  const modelDefault = DEFAULT_MODEL
+  const modelList = modelChoices(modelDefault)
+  const modelName = user.modelName?.trim() || modelDefault
+  const baseUrl = user.baseUrl?.trim() || null
+  return {
+    onboardingComplete: Boolean(profile.onboardingComplete),
+    modelList,
+    modelDefault,
+    user: {
+      apiKeyConfigured: Boolean(user.anthropicApiKey?.trim() || process.env.ANTHROPIC_API_KEY?.trim()),
+      modelName,
+      baseUrl,
+    },
+  }
+}
 
 // Create a default session if none exists (for legacy /chat compatibility)
 async function ensureDefaultSession(): Promise<string> {
@@ -103,6 +184,94 @@ Bun.serve({
         sessionCount: list.length,
         uptimeMs: Date.now() - startedAt,
       })
+    }
+
+    // ── Config (GUI onboarding/settings) ─────────────────────────────────────
+    if (path === '/config' && req.method === 'GET') {
+      return json(readConfigPayload())
+    }
+
+    if (path === '/config/validate' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({})) as {
+        anthropicApiKey?: string
+        modelName?: string
+      }
+      const key = body.anthropicApiKey?.trim() ?? ''
+      const modelName = body.modelName?.trim() ?? ''
+      if (!key) return json({ ok: false, error: 'API Key 不能为空' }, 400)
+      if (!modelName) return json({ ok: false, error: '模型不能为空' }, 400)
+      return json({ ok: true })
+    }
+
+    if (path === '/config' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({})) as {
+        anthropicApiKey?: string
+        modelName?: string
+        baseUrl?: string
+        onboardingComplete?: boolean
+      }
+      const prev = loadUserConfig('default')
+      const next = {
+        anthropicApiKey: body.anthropicApiKey?.trim() || prev.anthropicApiKey || '',
+        modelName: body.modelName?.trim() || prev.modelName || DEFAULT_MODEL,
+        baseUrl: body.baseUrl?.trim() || prev.baseUrl || '',
+      }
+      saveUserConfig('default', next)
+      forceApplyUserConfigToEnv('default')
+      if (typeof body.onboardingComplete === 'boolean') {
+        writeProfile('default', { onboardingComplete: body.onboardingComplete })
+      }
+      broadcastConfigChanged()
+      return json({ ok: true, config: readConfigPayload() })
+    }
+
+    if (path === '/events/config' && req.method === 'GET') {
+      const stream = new ReadableStream({
+        start(controller) {
+          const send = (line: string) => {
+            controller.enqueue(new TextEncoder().encode(line))
+          }
+          // handshake for EventSource
+          send(`data: ${JSON.stringify({ type: 'connected', ts: Date.now() })}\n\n`)
+          const unsubscribe = subscribeConfigSse(send)
+          const ping = setInterval(() => {
+            try {
+              send(': ping\n\n')
+            } catch {
+              /* ignore */
+            }
+          }, 15000)
+          req.signal.addEventListener('abort', () => {
+            clearInterval(ping)
+            unsubscribe()
+            try { controller.close() } catch { /* ignore */ }
+          })
+        },
+      })
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+          ...CORS_HEADERS,
+        },
+      })
+    }
+
+    // ── List Space vaults (filesystem under ~/.kyberkit/spaces) ───────────────
+    if (path === '/spaces' && req.method === 'GET') {
+      return json(listDiscoveredSpaces())
+    }
+
+    // ── Connectors status (live aggregation) ──────────────────────────────────
+    if (path === '/connectors' && req.method === 'GET') {
+      return json(listConnectorStatuses())
+    }
+
+    // ── Space docs tree (sidebar library) ─────────────────────────────────────
+    if (path === '/library/tree' && req.method === 'GET') {
+      const spaceId = url.searchParams.get('space_id')?.trim() || 'default'
+      return json(listSpaceDocsTree(spaceId))
     }
 
     // ── List sessions ─────────────────────────────────────────────────────────
@@ -324,6 +493,11 @@ Bun.serve({
 
 console.log(`✅ Kevin Sidecar running at http://localhost:${PORT}`)
 console.log(`   GET    /health`)
+console.log(`   GET    /config`)
+console.log(`   POST   /config`)
+console.log(`   POST   /config/validate`)
+console.log(`   GET    /events/config`)
+console.log(`   GET    /spaces`)
 console.log(`   GET    /sessions`)
 console.log(`   POST   /sessions`)
 console.log(`   GET    /sessions/:id`)

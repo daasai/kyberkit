@@ -4,21 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "3c44aff5673acc9e",
+        "id": "e14d24ce067f51bc",
         "type": "tabs",
         "children": [
           {
-            "id": "6cbffcedfbd905ec",
+            "id": "70434e0c1609b4a0",
             "type": "leaf",
             "state": {
               "type": "markdown",
               "state": {
-                "file": "specs/kevin1.5/UAT/uat_report_v1.5.md",
+                "file": "hermes/agent-design-manual-ch01.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "uat_report_v1.5"
+              "title": "agent-design-manual-ch01"
             }
           }
         ]
@@ -78,7 +78,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 302.5
+    "width": 254.5
   },
   "right": {
     "id": "7479c3582673b3d6",
@@ -156,13 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "specs/kevin1.5/UAT/uat_report_v1.5.md",
+                "file": "hermes/agent-design-manual-ch01.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "uat_report_v1.5 的大纲"
+              "title": "agent-design-manual-ch01 的大纲"
             }
           }
         ],
@@ -183,14 +183,37 @@
       "bases:新建数据库": false
     }
   },
-  "active": "6cbffcedfbd905ec",
+  "active": "8274e2e1046ac467",
   "lastOpenFiles": [
+    "specs/kevin1.5/kevin-v1.5-system-refactor-spec.md",
+    "specs/kevin1.5/kevin-v1.5-prd-rev3.md",
+    "specs/kevin2.0/assets/claude_design_config_full.png",
+    "specs/kevin2.0/assets/claude_workspace_layers.png",
+    "specs/kevin2.0/assets/claude_style_panel.png",
+    "specs/kevin2.0/assets/claude_design_canvas.png",
+    "specs/kevin2.0/assets/claude_design_system_config.png",
+    "specs/kevin2.0/assets/claude_component_detail.png",
+    "specs/kevin2.0/assets/claude_artifacts_layout.png",
+    "specs/kevin2.0/assets",
+    "specs/kevin2.0/design_reference.md",
+    "specs/kevin2.0",
+    "2026-05-07.md",
+    "未命名.canvas",
+    "specs/kevin1.5/kevin-v1.5-prd-rev2.md",
+    "superpowers/specs/2026-05-07-task3-global-search-design.md",
+    "specs/kevin1.5/UAT/uat_walkthrough_followup_round2_2026-05-07.md",
+    "specs/kevin1.5/UAT/uat_baseline_audit_2026-05-07.md",
+    "superpowers/plans/2026-05-07-kevin15-uat-improvement-implementation-plan.md",
+    "specs/kevin1.5/UAT/uat_improvement_plan_2026-05-07.md",
+    "specs/kevin1.5/kevin-v1.5-prd.draft-backup.md",
+    "specs/kevin1.5/kevin-v1.5-prd.preview-backup.md",
+    "specs/kevin1.5/kevin-v1.5-prd.md",
+    "specs/kevin1.5/UAT/uat_report_v1.5.md",
+    "specs/kevin1.5/UAT/uat_walkthrough_live_log_2026-05-07.md",
     "superpowers/plans/2026-05-07-kevin15-regression-fix-and-header-plan.md",
     "superpowers/specs/2026-05-07-kevin15-regression-fix-and-header-design.md",
     "specs/kevin1.5/UAT/uat_remediation_2026-05-06.md",
     "specs/kevin1.5/UAT/ux_walkthrough_report_2026-05-06.md",
-    "specs/kevin1.5/UAT/uat_report_v1.5.md",
-    "specs/kevin1.5/kevin-v1.5-prd.draft-backup.md",
     "superpowers/plans/2026-05-06-kevin15-uat-full-remediation-implementation-plan.md",
     "superpowers/specs/2026-05-06-kevin15-uat-full-remediation-design.md",
     "superpowers/plans",
@@ -206,22 +229,7 @@
     "specs/kevin1.5/skills/prd-draft/SKILL.md",
     "specs/kevin1.5/skills/weekly-report",
     "specs/kevin1.5/skills/standup-brief",
-    "specs/kevin1.5/skills/prd-draft",
-    "specs/kevin1.5/skills",
-    "specs/kevin1.5/skill-architecture.md",
-    "specs/kevin1.5/signoff-contract.md",
-    "specs/kevin1.5/kevin-v1.5-prd.preview-backup.md",
-    "specs/kevin1.5/kevin-v1.5-prd-rev2.md",
-    "specs/kevin1.5/README.md",
     "Pasted image 20260506145118.png",
-    "specs/kevin1.5/kevin-v1.5-prd.md",
-    "specs/kevin1.5/enterprise-ai-ui-research.md",
-    "README.md",
-    "Clippings/Anthropic 最新博客：Prompt Caching 是构建 Claude Code 的一切.md",
-    "specs/kevin1.0/feishu-mcp-roadmap.md",
-    "specs/kevin1.0/demo-and-packaging.md",
-    "specs/kevin1.0/mcp-filesystem-runbook.md",
-    "specs/kevin1.0/kevin-system-design.md",
     "specs/kevin1.0/poto/screen.png"
   ]
 }

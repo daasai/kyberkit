@@ -1,5 +1,7 @@
 # Kevin v1.5 产品需求文档 (PRD) — Rev2
 
+> **Rev3 架构补丁（2026-05-08）**：**Space / Library / 本机存储路径 / `KYBER_SPACES_ROOT` 边界** 等产品架构条款已迁移至 **[`kevin-v1.5-prd-rev3.md`](./kevin-v1.5-prd-rev3.md)**。实现与评审路径模型时 **以 Rev3 为准**；Rev2 其余章节仍为 v1.5 功能与交互的主本。
+>
 > **版本说明**：本文档是 [`kevin-v1.5-prd.md`](./kevin-v1.5-prd.md) 的重构与扩写版本。基于 2026-05-06 的产品研讨：
 > - 收敛 v1.5 的明确范围（Q1–Q6 决策）
 > - 新增 Skill 体系完整设计（D2–D16 决策）

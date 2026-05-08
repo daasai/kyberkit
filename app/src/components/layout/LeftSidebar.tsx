@@ -2,32 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
 import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
-import type { SpaceSwitchOutcome } from '../../lib/tauriSpace'
-
-type HandleSpaceSelectionArgs = {
-  targetSessionId: string
-  activeSessionId: string | null
-  switchToSessionSpace: (id: string) => Promise<SpaceSwitchOutcome>
-  onCurrentSpaceSelected?: () => void
-}
 
 type Connector = {
   name: string
   status: 'healthy' | 'error'
   lastSuccess: string
+  source?: 'live' | 'demo'
 }
 
-export async function handleSpaceSelection({
-  targetSessionId,
-  activeSessionId,
-  switchToSessionSpace,
-  onCurrentSpaceSelected,
-}: HandleSpaceSelectionArgs): Promise<SpaceSwitchOutcome> {
-  if (targetSessionId === activeSessionId) {
-    onCurrentSpaceSelected?.()
-    return 'noop'
-  }
-  return switchToSessionSpace(targetSessionId)
+type LibraryNode = {
+  name: string
+  path: string
+  kind: 'file' | 'dir'
+  children?: LibraryNode[]
 }
 
 export function sortConnectors(connectors: Connector[]): Connector[] {
@@ -50,11 +37,26 @@ function relativeTime(iso: string): string {
   return `${Math.floor(hrs / 24)}天前`
 }
 
-const FALLBACK_CONNECTORS: Connector[] = [
-  { name: 'Filesystem MCP', status: 'healthy', lastSuccess: '刚刚' },
-  { name: '系统监控 MCP',   status: 'healthy', lastSuccess: '2分钟前' },
-  { name: '贝易转 DW',      status: 'error',   lastSuccess: '20分钟前' },
-]
+function collectDefaultExpandedPaths(nodes: LibraryNode[], depth = 0): string[] {
+  const paths: string[] = []
+  for (const node of nodes) {
+    if (node.kind !== 'dir') continue
+    if (depth < 2) paths.push(node.path)
+    if (node.children?.length) paths.push(...collectDefaultExpandedPaths(node.children, depth + 1))
+  }
+  return paths
+}
+
+function findFirstFilePath(nodes: LibraryNode[]): string | null {
+  for (const node of nodes) {
+    if (node.kind === 'file') return node.path
+    if (node.children?.length) {
+      const nested = findFirstFilePath(node.children)
+      if (nested) return nested
+    }
+  }
+  return null
+}
 
 export function LeftSidebar({
   onOpenSkillStore,
@@ -65,23 +67,46 @@ export function LeftSidebar({
   onOpenAutomation?: () => void
   onOpenSearch?: () => void
 } = {}) {
-  const { sessions, activeSessionId, createSession, deleteSession, switchToSessionSpace, spaceId } = useSession()
+  const {
+    sessions,
+    activeSessionId,
+    setActiveSessionId,
+    createSession,
+    deleteSession,
+    spaceId,
+    setSpaceId,
+    spaces,
+    refreshSpaces,
+    openSpaceInNewWindow,
+  } = useSession()
   const { clearArtifact } = useArtifact()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [spaceMenuOpen, setSpaceMenuOpen] = useState(false)
   const spaceMenuRef = useRef<HTMLDivElement>(null)
   const [pendingSignoffSessionIds, setPendingSignoffSessionIds] = useState<Set<string>>(new Set())
-  const [rawConnectors, setRawConnectors] = useState<Connector[]>(FALLBACK_CONNECTORS)
+  const [rawConnectors, setRawConnectors] = useState<Connector[]>([])
+  const [connectorsUnavailable, setConnectorsUnavailable] = useState(false)
+  const [libraryNodes, setLibraryNodes] = useState<LibraryNode[]>([])
+  const [libraryLoading, setLibraryLoading] = useState(false)
+  const [libraryError, setLibraryError] = useState(false)
+  const [expandedLibraryPaths, setExpandedLibraryPaths] = useState<Set<string>>(new Set())
+  const [selectedLibraryPath, setSelectedLibraryPath] = useState<string | null>(null)
+  const [suggestedLibraryPath, setSuggestedLibraryPath] = useState<string | null>(null)
   const connectors = sortConnectors(rawConnectors)
 
-  // Dynamic connector fetch with fallback
+  // Dynamic connector fetch with strict unavailable state (no demo fallback).
   useEffect(() => {
     fetch(`${SIDECAR_URL}/connectors`)
       .then(r => r.ok ? r.json() : Promise.reject())
       .then((data: Connector[]) => {
-        if (Array.isArray(data) && data.length > 0) setRawConnectors(data)
+        if (!Array.isArray(data)) throw new Error('invalid connectors payload')
+        setRawConnectors(data)
+        setConnectorsUnavailable(false)
       })
-      .catch(() => { /* fallback stays */ })
+      .catch(() => {
+        setRawConnectors([])
+        setConnectorsUnavailable(true)
+      })
   }, [])
 
   // Pending sign-off polling — scoped to current space
@@ -111,15 +136,54 @@ export function LeftSidebar({
     return () => { cancelled = true; window.clearInterval(timer) }
   }, [spaceId])
 
-  const handleSelectSession = async (id: string) => {
-    await handleSpaceSelection({
-      targetSessionId: id,
-      activeSessionId,
-      switchToSessionSpace,
-      onCurrentSpaceSelected: () => {
-        setSpaceMenuOpen(false)
-      },
+  useEffect(() => {
+    let cancelled = false
+    const loadLibraryTree = async () => {
+      setLibraryLoading(true)
+      setLibraryError(false)
+      try {
+        const res = await fetch(`${SIDECAR_URL}/library/tree${qsSpace(spaceId)}`)
+        if (!res.ok) throw new Error('library tree fetch failed')
+        const data = (await res.json()) as LibraryNode[]
+        if (!Array.isArray(data)) throw new Error('invalid library tree payload')
+        if (cancelled) return
+        setLibraryNodes(data)
+        setExpandedLibraryPaths(new Set(collectDefaultExpandedPaths(data)))
+        const firstPath = findFirstFilePath(data)
+        setSuggestedLibraryPath(firstPath)
+        setSelectedLibraryPath((prev) => prev ?? firstPath)
+      } catch {
+        if (!cancelled) {
+          setLibraryNodes([])
+          setExpandedLibraryPaths(new Set())
+          setSuggestedLibraryPath(null)
+          setSelectedLibraryPath(null)
+          setLibraryError(true)
+        }
+      } finally {
+        if (!cancelled) setLibraryLoading(false)
+      }
+    }
+    void loadLibraryTree()
+    return () => { cancelled = true }
+  }, [spaceId])
+
+  const toggleLibraryDir = (path: string) => {
+    setExpandedLibraryPaths((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
     })
+  }
+
+  /** Switch Space inside this window (PRD §7.E vault switcher). */
+  const selectSpaceInCurrentWindow = (targetSpaceId: string) => {
+    if (targetSpaceId === spaceId) {
+      setSpaceMenuOpen(false)
+      return
+    }
+    setSpaceId(targetSpaceId)
     setSpaceMenuOpen(false)
   }
 
@@ -153,8 +217,8 @@ export function LeftSidebar({
     await createSession()
   }
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId)
-  const spaceAnchorLabel = activeSession?.title ?? '未选择 Space'
+  const currentSpaceMeta = spaces.find((s) => s.id === spaceId)
+  const spaceAnchorLabel = currentSpaceMeta?.label ?? spaceId ?? '未选择 Space'
 
   return (
     <div style={{
@@ -198,27 +262,130 @@ export function LeftSidebar({
             <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-on-surface-variant)' }}>
               文档库
             </span>
-            <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>最近引用</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <button
+                type="button"
+                style={{
+                  padding: '2px 4px',
+                  fontSize: '11px',
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--color-on-surface-variant)',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+                onClick={() => {
+                  setLibraryLoading(true)
+                  fetch(`${SIDECAR_URL}/library/tree${qsSpace(spaceId)}`)
+                    .then((r) => r.ok ? r.json() : Promise.reject())
+                    .then((data: LibraryNode[]) => {
+                      if (!Array.isArray(data)) throw new Error('invalid library tree payload')
+                      setLibraryNodes(data)
+                      setExpandedLibraryPaths(new Set(collectDefaultExpandedPaths(data)))
+                      const firstPath = findFirstFilePath(data)
+                      setSuggestedLibraryPath(firstPath)
+                      setSelectedLibraryPath((prev) => prev ?? firstPath)
+                      setLibraryError(false)
+                    })
+                    .catch(() => {
+                      setLibraryNodes([])
+                      setExpandedLibraryPaths(new Set())
+                      setSuggestedLibraryPath(null)
+                      setSelectedLibraryPath(null)
+                      setLibraryError(true)
+                    })
+                    .finally(() => setLibraryLoading(false))
+                }}
+              >
+                刷新
+              </button>
+              <button
+                type="button"
+                style={{
+                  padding: '2px 4px',
+                  fontSize: '11px',
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--color-on-surface-variant)',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+                onClick={() => setExpandedLibraryPaths(new Set())}
+              >
+                折叠全部
+              </button>
+            </span>
           </div>
-          {[
-            { icon: 'folder_open', label: '@/docs/specs/kevin1.5', color: 'var(--color-primary)' },
-            { icon: 'description', label: '@/docs/specs/kevin1.5/README.md', color: '#6B7280' },
-            { icon: 'description', label: '@/docs/specs/kevin1.5/task-lifecycle.md', color: '#6B7280' },
-          ].map(({ icon, label, color }) => (
-            <div key={label} style={{
-              display: 'flex', alignItems: 'center', gap: '8px',
-              padding: '6px 12px', borderRadius: '8px', cursor: 'pointer',
-              fontSize: '13px', fontWeight: 500, color: 'var(--color-on-surface)',
-              transition: 'background 150ms',
-            }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-surface-container)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-            >
-              <span style={{ width: '16px', flexShrink: 0 }} />
-              <span className="material-symbols-outlined" style={{ fontSize: '16px', color }}>{icon}</span>
-              <span style={{ fontSize: '13px' }}>{label}</span>
+          {libraryLoading ? (
+            <div style={{ padding: '6px 12px', fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
+              加载文档库...
             </div>
-          ))}
+          ) : libraryError ? (
+            <div style={{ padding: '6px 12px', fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
+              文档库加载失败，请稍后重试
+            </div>
+          ) : libraryNodes.length === 0 ? (
+            <div style={{ padding: '6px 12px', fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
+              当前 Space 暂无文档
+            </div>
+          ) : (
+            libraryNodes.map((node) => {
+              const renderNode = (entry: LibraryNode, depth: number): React.ReactNode => {
+                const isDir = entry.kind === 'dir'
+                const expanded = isDir && expandedLibraryPaths.has(entry.path)
+                const isSelected = selectedLibraryPath === entry.path
+                const isSuggested = !isSelected && suggestedLibraryPath === entry.path
+                return (
+                  <div key={entry.path}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isDir) {
+                          toggleLibraryDir(entry.path)
+                          return
+                        }
+                        setSelectedLibraryPath(entry.path)
+                      }}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 12px',
+                        paddingLeft: `${12 + depth * 14}px`,
+                        border: 'none',
+                        background: isSelected
+                          ? 'color-mix(in srgb, var(--color-primary) 18%, transparent)'
+                          : isSuggested
+                            ? 'color-mix(in srgb, var(--color-primary) 9%, transparent)'
+                            : 'transparent',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        color: 'var(--color-on-surface)',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ width: '14px', flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
+                        {isDir ? (
+                          <span className="material-symbols-outlined" style={{ fontSize: '14px', color: 'var(--color-on-surface-variant)' }}>
+                            {expanded ? 'expand_more' : 'chevron_right'}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="material-symbols-outlined" style={{ fontSize: '15px', color: isDir ? 'var(--color-primary)' : 'var(--color-on-surface-variant)', flexShrink: 0 }}>
+                        {isDir ? 'folder_open' : 'description'}
+                      </span>
+                      <span style={{ fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
+                        {entry.name}
+                      </span>
+                    </button>
+                    {isDir && expanded && entry.children?.map((child) => renderNode(child, depth + 1))}
+                  </div>
+                )
+              }
+              return renderNode(node, 0)
+            })
+          )}
         </div>
 
         {/* Connectors */}
@@ -227,32 +394,36 @@ export function LeftSidebar({
             <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-on-surface-variant)' }}>
               连接器
             </span>
-            <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-              {connectorSummary(connectors)}
-            </span>
+            <span />
           </div>
-          {connectors.map((item) => (
-            <div
-              key={item.name}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '8px',
-                padding: '6px 12px', borderRadius: '8px',
-                fontSize: '13px', fontWeight: 500, color: 'var(--color-on-surface)',
-              }}
-            >
-              <span
-                style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  background: item.status === 'healthy' ? '#16a34a' : '#dc2626',
-                  flexShrink: 0,
-                }}
-              />
-              <span style={{ fontSize: '13px', flex: 1 }}>{item.name}</span>
-              <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>{item.lastSuccess}</span>
+          {connectorsUnavailable || connectors.length === 0 ? (
+            <div style={{ padding: '6px 12px', fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
+              暂无可用连接器
             </div>
-          ))}
+          ) : (
+            connectors.map((item) => (
+              <div
+                key={item.name}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  padding: '6px 12px', borderRadius: '8px',
+                  fontSize: '13px', fontWeight: 500, color: 'var(--color-on-surface)',
+                }}
+              >
+                <span
+                  style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    background: item.status === 'healthy' ? '#16a34a' : '#dc2626',
+                    flexShrink: 0,
+                  }}
+                />
+                <span style={{ fontSize: '13px', flex: 1 }}>{item.name}</span>
+                <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>{item.lastSuccess}</span>
+              </div>
+            ))
+          )}
         </div>
 
         {/* Recent Artifacts — dynamic from Sidecar */}
@@ -286,8 +457,8 @@ export function LeftSidebar({
                   key={id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => handleSelectSession(id)}
-                  onKeyDown={e => e.key === 'Enter' && handleSelectSession(id)}
+                  onClick={() => setActiveSessionId(id)}
+                  onKeyDown={(e) => e.key === 'Enter' && setActiveSessionId(id)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '8px',
                     padding: '8px 12px', borderRadius: '8px',
@@ -351,7 +522,13 @@ export function LeftSidebar({
           data-testid="space-switcher"
           aria-expanded={spaceMenuOpen}
           aria-haspopup="menu"
-          onClick={() => setSpaceMenuOpen((o) => !o)}
+          onClick={() => {
+            setSpaceMenuOpen((o) => {
+              const next = !o
+              if (next) void refreshSpaces()
+              return next
+            })
+          }}
           style={{
             width: '100%',
             padding: '8px 10px',
@@ -405,19 +582,19 @@ export function LeftSidebar({
               padding: '6px 0',
             }}
           >
-            {sessions.length === 0 ? (
+            {spaces.length === 0 ? (
               <div style={{ padding: '12px 14px', fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
-                暂无 Space，请先新建会话
+                加载 Space 列表…
               </div>
             ) : (
-              sessions.map(({ id, title, updatedAt }) => {
-                const isCurrent = id === activeSessionId
+              spaces.map(({ id, label }) => {
+                const isCurrent = id === spaceId
                 return (
                   <button
                     key={id}
                     type="button"
                     role="menuitem"
-                    onClick={() => void handleSelectSession(id)}
+                    onClick={() => selectSpaceInCurrentWindow(id)}
                     style={{
                       width: '100%',
                       display: 'flex',
@@ -441,10 +618,10 @@ export function LeftSidebar({
                     </span>
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {title}
+                        {label}
                       </span>
                       <span style={{ display: 'block', fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: 2 }}>
-                        {relativeTime(updatedAt)}
+                        {id}
                       </span>
                     </span>
                   </button>
@@ -457,7 +634,7 @@ export function LeftSidebar({
                 role="menuitem"
                 onClick={() => {
                   setSpaceMenuOpen(false)
-                  document.getElementById('sidebar-session-history')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  void openSpaceInNewWindow(spaceId)
                 }}
                 style={{
                   width: '100%',

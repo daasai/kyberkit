@@ -110,9 +110,39 @@ export function SkillStore({ onBack }: { onBack: () => void }) {
             </div>
           ))}
         {tab === 'mine' && (
-          <p style={{ marginTop: '16px', fontSize: '13px', color: 'var(--color-on-surface-variant)' }}>
-            「+ 新建私有 Skill」与 Forge 蒸馏卡片后续在此收口；物理目录遵循 ~/.kyberkit 三层资产。
-          </p>
+          <div
+            style={{
+              marginTop: '16px',
+              padding: '12px',
+              borderRadius: '10px',
+              border: '1px dashed var(--color-outline-variant)',
+              background: 'var(--color-surface-container-lowest)',
+            }}
+          >
+            <button
+              type="button"
+              disabled
+              title="将通过 Forge 蒸馏后确认落盘"
+              aria-describedby="private-skill-forge-note"
+              style={{
+                padding: '8px 12px',
+                borderRadius: '8px',
+                border: '1px solid var(--color-outline-variant)',
+                background: 'var(--color-surface-container)',
+                color: 'var(--color-on-surface-variant)',
+                cursor: 'not-allowed',
+                fontWeight: 600,
+              }}
+            >
+              + 新建私有 Skill
+            </button>
+            <p
+              id="private-skill-forge-note"
+              style={{ margin: '8px 0 0', fontSize: '13px', color: 'var(--color-on-surface-variant)' }}
+            >
+              私有 Skill 将通过 Forge 蒸馏后确认落盘。
+            </p>
+          </div>
         )}
       </div>
     </div>

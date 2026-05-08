@@ -22,7 +22,7 @@ export async function openAndFocusSpace(targetSpaceId: string): Promise<boolean>
 
   // Browser/dev fallback: emulate dedicated-space behavior with a new tab/window.
   const nextUrl = new URL(window.location.href)
-  nextUrl.searchParams.set('space', targetSpaceId)
+  nextUrl.searchParams.set('space_id', targetSpaceId)
   const popup = window.open(nextUrl.toString(), '_blank', 'noopener,noreferrer')
   if (!popup) return false
   popup.focus()
