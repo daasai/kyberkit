@@ -16,6 +16,7 @@ import type { KyberRuntime } from '../src/runtime/KyberRuntime.js'
 import type { AgentSession } from '../src/runtime/AgentSession.js'
 import { libraryTechRoot } from '../src/runtime/paths/PathResolver.js'
 import type { AgentExecutionContext } from '../src/runtime/AgentExecutionContext.js'
+import { buildSkillDirectory, scanSkillsForSpace } from './SkillScanner.js'
 import {
   dbCreateSession,
   dbDeleteSession,
@@ -59,6 +60,14 @@ function toSafeRelativeDir(raw: string | null | undefined): string {
 function executionContextForScope(scope: SessionScope, sessionId: string): AgentExecutionContext {
   const absMount = resolve(scope.mountPath)
   const absTech = resolve(libraryTechRoot(scope.libraryId))
+  let skillDirectory: string | undefined
+  try {
+    const records = scanSkillsForSpace(scope.spaceId)
+    const block = buildSkillDirectory(records)
+    skillDirectory = block || undefined
+  } catch {
+    skillDirectory = undefined
+  }
   return {
     spaceId: scope.spaceId,
     libraryId: scope.libraryId,
@@ -69,6 +78,7 @@ function executionContextForScope(scope: SessionScope, sessionId: string): Agent
     // RS-10 deferred: MCP filesystem root remains process-global for now.
     mcpRoots: [],
     sessionId,
+    skillDirectory,
   }
 }
 

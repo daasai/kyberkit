@@ -21,4 +21,10 @@ export interface AgentExecutionContext {
    */
   mcpRoots: string[]
   sessionId: string
+  /**
+   * Kevin v1.5 §12.5 — L1 progressive disclosure.
+   * Compact (name, description) directory of all skills visible to this Space.
+   * When present, the runtime appends it to the session's platformDirective.
+   */
+  skillDirectory?: string
 }

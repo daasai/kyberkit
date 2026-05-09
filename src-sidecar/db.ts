@@ -7,7 +7,11 @@ import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import { libraryTechRoot, readSpaceLibraryRegistry } from '../src/runtime/paths/PathResolver.js'
+import {
+  libraryTechRoot,
+  readSpaceLibraryRegistry,
+  resolveSpaceToLibrary,
+} from '../src/runtime/paths/PathResolver.js'
 
 export interface SessionRow {
   id: string
@@ -30,6 +34,27 @@ export interface ChatMessageRow {
   role: 'user' | 'assistant'
   content: string
   created_at: string
+}
+
+export type TaskState =
+  | 'queued'
+  | 'running'
+  | 'awaiting-signoff'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+
+export interface TaskRow {
+  id: string
+  space_id: string
+  state: TaskState
+  skill_name: string | null
+  trigger_kind: string
+  payload: string | null
+  progress: number
+  message: string | null
+  created_at: string
+  updated_at: string
 }
 
 function resolveDbPath(libraryId: string): string {
@@ -90,11 +115,102 @@ export function getDb(libraryId: string): Database {
       created_at  TEXT NOT NULL
     )
   `)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id            TEXT PRIMARY KEY,
+      space_id      TEXT NOT NULL,
+      state         TEXT NOT NULL,
+      skill_name    TEXT,
+      trigger_kind  TEXT NOT NULL DEFAULT 'manual',
+      payload       TEXT,
+      progress      REAL NOT NULL DEFAULT 0,
+      message       TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
+    )
+  `)
   db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_space ON sessions(space_id, updated_at DESC, id)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at, id)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_space ON tasks(space_id, updated_at DESC, id)`)
   console.log(`[DB] Connected: ${dbPath}`)
   dbByLibraryId.set(key, db)
   return db
+}
+
+function dbForSpace(spaceId: string): Database | null {
+  const binding = resolveSpaceToLibrary(spaceId)
+  if (!binding) return null
+  return getDb(binding.libraryId)
+}
+
+/** Locate any task by id across all known library DBs (tasks are space-scoped, not space-pinned in path). */
+function findTaskById(id: string): { db: Database; row: TaskRow } | null {
+  for (const binding of readSpaceLibraryRegistry()) {
+    const db = getDb(binding.libraryId)
+    const row = db.query('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | null
+    if (row) return { db, row }
+  }
+  return null
+}
+
+export function dbInsertTask(row: TaskRow): void {
+  const db = dbForSpace(row.space_id)
+  if (!db) throw new Error(`No library bound for space ${row.space_id}`)
+  db.run(
+    `INSERT INTO tasks (id, space_id, state, skill_name, trigger_kind, payload, progress, message, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      row.id,
+      row.space_id,
+      row.state,
+      row.skill_name,
+      row.trigger_kind,
+      row.payload,
+      row.progress,
+      row.message,
+      row.created_at,
+      row.updated_at,
+    ],
+  )
+}
+
+export function dbGetTask(id: string): TaskRow | null {
+  const found = findTaskById(id)
+  return found ? found.row : null
+}
+
+export function dbListTasks(spaceId: string): TaskRow[] {
+  const db = dbForSpace(spaceId)
+  if (!db) return []
+  return db
+    .query('SELECT * FROM tasks WHERE space_id = ? ORDER BY updated_at DESC, id')
+    .all(spaceId) as TaskRow[]
+}
+
+export function dbUpdateTaskState(
+  id: string,
+  patch: Partial<Pick<TaskRow, 'state' | 'progress' | 'message'>>,
+): void {
+  const found = findTaskById(id)
+  if (!found) return
+  const now = new Date().toISOString()
+  const next: TaskRow = {
+    ...found.row,
+    ...(patch.state !== undefined ? { state: patch.state } : {}),
+    ...(patch.progress !== undefined ? { progress: patch.progress } : {}),
+    ...(patch.message !== undefined ? { message: patch.message } : {}),
+    updated_at: now,
+  }
+  found.db.run(
+    `UPDATE tasks SET state = ?, progress = ?, message = ?, updated_at = ? WHERE id = ?`,
+    [next.state, next.progress, next.message, next.updated_at, id],
+  )
+}
+
+export function dbDeleteTask(id: string): void {
+  const found = findTaskById(id)
+  if (!found) return
+  found.db.run('DELETE FROM tasks WHERE id = ?', [id])
 }
 
 export function dbListSessions(libraryId: string, spaceId: string): SessionRow[] {

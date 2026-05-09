@@ -23,7 +23,14 @@ import { dbCountAllSessions, dbListChatMessages, dbPersistChatTurn } from './db.
 import {
   attachSkillSuggestedRuntimeBridge,
   createSpaceEventBroadcaster,
+  subscribeSpaceEvents,
 } from './spaceEventBroadcast.js'
+import { TaskManager } from './TaskManager.js'
+import { CronScheduler } from './CronScheduler.js'
+import { makeCronOnTrigger, syncCronForSpace } from './cronBridge.js'
+import { appendAudit, kevinAuditDir } from '../src/runtime/audit/AuditLogger.js'
+import { previewFeishuDocDiff, runFeishuDocWriteMock } from './actuators/feishuDocWrite.js'
+import { join as pathJoin } from 'path'
 import {
   ensureKevinLayout,
   isUuidString,
@@ -41,6 +48,15 @@ import {
 } from '../src/runtime/config/UserConfigStore.js'
 import { broadcastConfigChanged, subscribeConfigSse } from './configBroadcast.js'
 import { readProfile, writeProfile } from '../src/runtime/paths/PathResolver.js'
+import { loadSkillFull, scanSkillsForSpace } from './SkillScanner.js'
+import { acceptForgeDraft, suggestForgeDraft } from './SkillForge.js'
+import {
+  appendStyleNote,
+  composeSkillBody,
+  loadStyleNotes,
+  recordSkillEditDiff,
+} from './SkillLearningLoop.js'
+import { promoteSpaceSkillToUser, copyUserSkillToSpace } from './skillTierOps.js'
 
 /** Optional dotenv-style file (Tauri sets `KYBERKIT_ENV_FILE` in release). Does not override existing env. */
 async function applyKevinEnvFile(): Promise<void> {
@@ -137,7 +153,23 @@ const spaceEventBroadcaster = createSpaceEventBroadcaster()
 attachSkillSuggestedRuntimeBridge(runtime.getBus(), spaceEventBroadcaster)
 
 const manager = new SessionManager(runtime)
-console.log('[Kevin Sidecar] SessionManager ready.')
+const taskManager = new TaskManager()
+const signoffStartedAt = new Map<string, number>()
+const cronScheduler = new CronScheduler({ onTrigger: makeCronOnTrigger(taskManager) })
+const cronSyncedSpaces = new Set<string>()
+function ensureCronSynced(spaceId: string): void {
+  if (cronSyncedSpaces.has(spaceId)) return
+  try {
+    syncCronForSpace(cronScheduler, spaceId)
+    cronSyncedSpaces.add(spaceId)
+  } catch (err) {
+    console.error(`[Kevin Sidecar] cron sync failed for space ${spaceId.slice(0, 8)}:`, err)
+  }
+}
+for (const s of listRegistrySpaces()) {
+  ensureCronSynced(s.spaceId)
+}
+console.log('[Kevin Sidecar] SessionManager + TaskManager + CronScheduler ready.')
 
 const DEFAULT_MODEL = process.env.KYBER_MODEL_NAME?.trim() || 'claude-sonnet-4-20250514'
 
@@ -388,6 +420,325 @@ Bun.serve({
     // ── Connectors status (live aggregation) ──────────────────────────────────
     if (path === '/connectors' && req.method === 'GET') {
       return json(listConnectorStatuses())
+    }
+
+    // ── Skill registry — L1 directory & L2 full ───────────────────────────────
+    if (path === '/skills' && req.method === 'GET') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      ensureCronSynced(scope.scope.spaceId)
+      const list = scanSkillsForSpace(scope.scope.spaceId).map((s) => ({
+        name: s.name,
+        description: s.description,
+        scope: s.scope,
+        risk: s.risk,
+        allowedTools: s.allowedTools,
+        triggers: s.triggers,
+        cron: s.cron ?? null,
+      }))
+      return json(list)
+    }
+
+    // ── Cron — explicit re-sync (called after forge/promote/edit) ─────────────
+    if (path === '/cron/sync' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const entries = syncCronForSpace(cronScheduler, scope.scope.spaceId)
+      cronSyncedSpaces.add(scope.scope.spaceId)
+      return json({ ok: true, jobs: entries })
+    }
+
+    if (path === '/cron/jobs' && req.method === 'GET') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const sid = scope.scope.spaceId
+      ensureCronSynced(sid)
+      return json(cronScheduler.list().filter((j) => j.spaceId === sid))
+    }
+
+    const skillDetailMatch = path.match(/^\/skills\/([a-z0-9][a-z0-9-]*)$/)
+    if (skillDetailMatch && req.method === 'GET') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const full = loadSkillFull(scope.scope.spaceId, skillDetailMatch[1])
+      if (!full) return json({ error: 'Skill not found' }, 404)
+      // L2 disclosure composes raw body + Layer 1 style notes (PRD §12.4.1).
+      const styleNotes = loadStyleNotes(scope.scope.spaceId, full.name)
+      const composedBody = composeSkillBody(full.body, styleNotes)
+      return json({
+        name: full.name,
+        description: full.description,
+        scope: full.scope,
+        risk: full.risk,
+        allowedTools: full.allowedTools,
+        triggers: full.triggers,
+        body: composedBody,
+        rawBody: full.body,
+        styleNotes,
+        frontmatter: full.frontmatter,
+        absPath: full.absPath,
+      })
+    }
+
+    // ── Forge — P0 trigger detection (suggest a draft) ────────────────────────
+    if (path === '/skills/forge/suggest' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as {
+        message?: string
+        assistantSummary?: string
+      }
+      const draft = suggestForgeDraft({
+        message: body.message ?? '',
+        assistantSummary: body.assistantSummary,
+      })
+      if (!draft) return json({ trigger: null }, 200)
+      return json(draft)
+    }
+
+    // ── Forge — accept (write SKILL.md to Space tier) ─────────────────────────
+    if (path === '/skills/forge/accept' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as {
+        name?: string
+        description?: string
+        body?: string
+        risk?: 'low' | 'medium' | 'high'
+      }
+      try {
+        const written = acceptForgeDraft({
+          spaceId: scope.scope.spaceId,
+          name: body.name ?? '',
+          description: body.description ?? '',
+          bodyMarkdown: body.body ?? '',
+          risk: body.risk,
+        })
+        syncCronForSpace(cronScheduler, scope.scope.spaceId)
+        return json({ ok: true, name: written.name, absPath: written.absPath }, 201)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return json({ error: msg }, 400)
+      }
+    }
+
+    // ── LearningLoop Layer 1 — record edit diff (Sidecar callable) ────────────
+    if (path === '/skills/learning/diff' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as {
+        skillName?: string
+        original?: string
+        edited?: string
+      }
+      if (!body.skillName) return json({ error: 'skillName is required' }, 400)
+      try {
+        recordSkillEditDiff({
+          spaceId: scope.scope.spaceId,
+          skillName: body.skillName,
+          original: body.original ?? '',
+          edited: body.edited ?? '',
+        })
+        return json({ ok: true })
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 400)
+      }
+    }
+
+    // ── LearningLoop Layer 1 — append a manual style note ─────────────────────
+    if (path === '/skills/learning/note' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as {
+        skillName?: string
+        note?: string
+      }
+      if (!body.skillName || !body.note) {
+        return json({ error: 'skillName and note are required' }, 400)
+      }
+      try {
+        appendStyleNote({
+          spaceId: scope.scope.spaceId,
+          skillName: body.skillName,
+          note: body.note,
+        })
+        return json({ ok: true })
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 400)
+      }
+    }
+
+    // ── Async tasks (S-8 / Sprint D will populate triggers) ───────────────────
+    if (path === '/tasks' && req.method === 'GET') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      return json(taskManager.list(scope.scope.spaceId))
+    }
+
+    if (path === '/tasks' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as {
+        skillName?: string
+        triggerKind?: string
+        payload?: unknown
+      }
+      const row = taskManager.createTask(scope.scope.spaceId, {
+        skill_name: body.skillName,
+        trigger_kind: body.triggerKind,
+        payload: body.payload,
+      })
+      return json(row, 201)
+    }
+
+    // ── Sign-off — request (Feishu actuator entry point) ──────────────────────
+    if (path === '/signoff/request' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as {
+        actuatorId?: string
+        title?: string
+        bodyMarkdown?: string
+        priorBodyMarkdown?: string
+        sessionId?: string
+        skillName?: string
+      }
+      const actuatorId = body.actuatorId ?? 'artifact.feishu-doc.write'
+      const diff = previewFeishuDocDiff({
+        prior: body.priorBodyMarkdown ?? '',
+        next: body.bodyMarkdown ?? '',
+      })
+      const task = taskManager.createSignoffTask(scope.scope.spaceId, {
+        skill_name: body.skillName ?? actuatorId,
+        payload: {
+          actuatorId,
+          title: body.title,
+          diff,
+          bodyMarkdown: body.bodyMarkdown,
+          priorBodyMarkdown: body.priorBodyMarkdown,
+          sessionId: body.sessionId,
+        },
+      })
+      signoffStartedAt.set(task.id, Date.now())
+      appendAudit({
+        userId: 'default',
+        spaceId: scope.scope.spaceId,
+        sessionId: body.sessionId,
+        taskId: task.id,
+        skillName: body.skillName,
+        actuatorId,
+        riskLevel: 'medium',
+        targetSummary: body.title,
+        decision: 'pending',
+      })
+      return json({ task, diff }, 202)
+    }
+
+    // ── Sign-off — resolve (approved | rejected) ──────────────────────────────
+    const signoffMatch = path.match(/^\/signoff\/([^/]+)$/)
+    if (signoffMatch && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as { decision?: 'approved' | 'rejected' }
+      const decision = body.decision === 'rejected' ? 'rejected' : 'approved'
+      const task = taskManager.getInSpace(signoffMatch[1], scope.scope.spaceId)
+      if (!task) return json({ error: 'task not found' }, 404)
+      const startedAt = signoffStartedAt.get(task.id) ?? Date.now()
+      const latency = Date.now() - startedAt
+
+      let actuatorResult: unknown = null
+      if (decision === 'approved') {
+        const payload = task.payload ? JSON.parse(task.payload) : {}
+        if (payload.actuatorId === 'artifact.feishu-doc.write') {
+          actuatorResult = runFeishuDocWriteMock(
+            {
+              title: payload.title ?? 'Untitled',
+              bodyMarkdown: payload.bodyMarkdown ?? '',
+              spaceId: scope.scope.spaceId,
+              sessionId: payload.sessionId ?? task.id,
+            },
+            { mockDir: pathJoin(kevinAuditDir(), 'feishu-mock') },
+          )
+        }
+      }
+
+      const next = taskManager.resolveSignoff(task.id, decision === 'approved')
+      signoffStartedAt.delete(task.id)
+      appendAudit({
+        userId: 'default',
+        spaceId: scope.scope.spaceId,
+        taskId: task.id,
+        skillName: task.skill_name ?? undefined,
+        actuatorId: 'artifact.feishu-doc.write',
+        riskLevel: 'medium',
+        decision,
+        signoffLatencyMs: latency,
+      })
+      return json({ task: next, actuatorResult, latencyMs: latency })
+    }
+
+    // ── Per-Space SSE bus (tasks, sign-off, sensors) ──────────────────────────
+    if (path === '/events/space' && req.method === 'GET') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const spaceId = scope.scope.spaceId
+      const stream = new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder()
+          const send = (data: unknown) => {
+            try {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+            } catch {
+              /* client disconnected */
+            }
+          }
+          send({ type: 'connected', space_id: spaceId, ts: Date.now() })
+          const unsubscribe = subscribeSpaceEvents(spaceId, send)
+          const ping = setInterval(() => {
+            try {
+              controller.enqueue(encoder.encode(': ping\n\n'))
+            } catch {
+              /* ignore */
+            }
+          }, 15000)
+          req.signal.addEventListener('abort', () => {
+            clearInterval(ping)
+            unsubscribe()
+            try { controller.close() } catch { /* ignore */ }
+          })
+        },
+      })
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+          ...CORS_HEADERS,
+        },
+      })
+    }
+
+    // ── Skill Store — promote Space → User / copy User → Space ────────────────
+    if (path === '/skills/promote' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as {
+        skillName?: string
+        from?: 'space' | 'user'
+      }
+      if (!body.skillName) return json({ error: 'skillName is required' }, 400)
+      const direction = body.from ?? 'space'
+      try {
+        if (direction === 'space') {
+          await promoteSpaceSkillToUser(scope.scope.spaceId, body.skillName)
+        } else {
+          await copyUserSkillToSpace(body.skillName, scope.scope.spaceId)
+        }
+        syncCronForSpace(cronScheduler, scope.scope.spaceId)
+        return json({ ok: true })
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 400)
+      }
     }
 
     // ── Space docs tree (sidebar library) ─────────────────────────────────────
@@ -692,6 +1043,20 @@ console.log(`   POST   /config`)
 console.log(`   POST   /config/validate`)
 console.log(`   GET    /events/config`)
 console.log(`   GET    /spaces`)
+console.log(`   GET    /skills          (L1 directory)`)
+console.log(`   GET    /skills/:name    (L2 full body)`)
+console.log(`   POST   /skills/forge/suggest`)
+console.log(`   POST   /skills/forge/accept`)
+console.log(`   POST   /skills/learning/diff`)
+console.log(`   POST   /skills/learning/note`)
+console.log(`   POST   /skills/promote`)
+console.log(`   GET    /cron/jobs`)
+console.log(`   POST   /cron/sync`)
+console.log(`   GET    /tasks`)
+console.log(`   POST   /tasks`)
+console.log(`   POST   /signoff/request`)
+console.log(`   POST   /signoff/:taskId`)
+console.log(`   GET    /events/space          (SSE)`)
 console.log(`   GET    /sessions`)
 console.log(`   POST   /sessions`)
 console.log(`   GET    /sessions/:id`)

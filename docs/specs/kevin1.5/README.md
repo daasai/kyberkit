@@ -13,6 +13,7 @@
 | [skill-architecture.md](./skill-architecture.md) | **SKILL.md 规范**、三级 scope、加载器、Forge / Store API |
 | [task-lifecycle.md](./task-lifecycle.md) | **异步任务状态机**、Cron、SSE、`space_id` 隔离 |
 | [signoff-contract.md](./signoff-contract.md) | **HITL Sign-off**、审计日志、Actuator 风险分级 |
+| [UAT/uat_mvp_rc_2026-05-09.md](./UAT/uat_mvp_rc_2026-05-09.md) | **MVP-RC UAT 报告**（C 方案 5 个 Sprint，S-1~S-12 全量交付，2026-05-09） |
 
 ## v1.0 对照
 

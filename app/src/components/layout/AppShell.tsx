@@ -147,7 +147,7 @@ export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {
           <Panel defaultSize={savedSizes[1]} minSize={35}>
             <div id="kevin-center-panel" style={{ height: '100%', overflow: 'hidden', position: 'relative' }}>
               {centerView === 'editor' && <CenterPanel />}
-              {centerView === 'skillstore' && <SkillStore onBack={() => setCenterView('editor')} />}
+              {centerView === 'skillstore' && <SkillStore onBack={() => setCenterView('editor')} spaceId={spaceId} />}
               {centerView === 'automation' && <AutomationCenter spaceId={spaceId} onBack={() => setCenterView('editor')} />}
               {searchOpen && <GlobalSearchView onBack={() => setSearchOpen(false)} />}
             </div>

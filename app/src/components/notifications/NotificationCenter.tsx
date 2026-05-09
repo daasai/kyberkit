@@ -1,47 +1,88 @@
 /**
- * 通知中心 — 待签批队列首位（PRD §11.4）
+ * 通知中心 — 待签批 + 完成卡片聚合（PRD §11.4 / Sprint D · S-9）
+ *
+ *  - 待签批 (awaiting-signoff) 始终置顶，逐条展示。
+ *  - 同一 Skill 在 1 小时滚动窗内 ≥3 次完成 → 折叠为聚合卡。
+ *  - 失败 / 取消单独展示。
+ *  - 通过 `/events/space` SSE 实时刷新。
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
 import { useSession } from '../../contexts/SessionContext'
+import {
+  aggregateNotifications,
+  type NotificationGroup,
+  type RawTaskRow,
+} from '../../lib/notificationAggregation'
 
-interface TaskRow {
-  id: string
-  state: string
-  skill_name: string | null
-  message: string | null
+interface TaskRow extends RawTaskRow {
+  trigger_kind?: string | null
+  payload?: string | null
 }
 
 export function NotificationCenter({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { spaceId } = useSession()
-  const [pending, setPending] = useState<TaskRow[]>([])
+  const [tasks, setTasks] = useState<TaskRow[]>([])
 
-  const load = () => {
+  const load = useCallback(() => {
+    if (!spaceId) return
     fetch(`${SIDECAR_URL}/tasks${qsSpace(spaceId)}`)
       .then((r) => r.json())
-      .then((rows: TaskRow[]) =>
-        setPending(Array.isArray(rows) ? rows.filter((x) => x.state === 'awaiting-signoff') : []),
-      )
-      .catch(() => setPending([]))
-  }
+      .then((rows: TaskRow[]) => setTasks(Array.isArray(rows) ? rows : []))
+      .catch(() => setTasks([]))
+  }, [spaceId])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || !spaceId) return
     load()
-    const id = window.setInterval(load, 3000)
-    return () => window.clearInterval(id)
-  }, [open, spaceId])
+    const id = window.setInterval(load, 5000)
+    let es: EventSource | null = null
+    try {
+      es = new EventSource(`${SIDECAR_URL}/events/space${qsSpace(spaceId)}`)
+      const refresh = () => load()
+      es.addEventListener('message', (ev) => {
+        try {
+          const data = JSON.parse((ev as MessageEvent).data)
+          if (
+            data?.type === 'task_progress' ||
+            data?.type === 'task_completed' ||
+            data?.type === 'task_cancelled' ||
+            data?.type === 'signoff_required'
+          ) {
+            refresh()
+          }
+        } catch {
+          /* ignore non-JSON ping frames */
+        }
+      })
+      es.onerror = () => {
+        // EventSource auto-retries; keep polling as backup.
+      }
+    } catch {
+      es = null
+    }
+    return () => {
+      window.clearInterval(id)
+      try { es?.close() } catch { /* ignore */ }
+    }
+  }, [open, spaceId, load])
 
-  const resolve = (taskId: string, approved: boolean) => {
-    void fetch(`${SIDECAR_URL}/tasks/${taskId}/signoff${qsSpace(spaceId)}`, {
+  const groups: NotificationGroup[] = useMemo(
+    () => aggregateNotifications(tasks),
+    [tasks],
+  )
+
+  const resolve = (taskId: string, decision: 'approved' | 'rejected') => {
+    void fetch(`${SIDECAR_URL}/signoff/${taskId}${qsSpace(spaceId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approved }),
+      body: JSON.stringify({ decision }),
     }).then(() => load())
   }
 
   if (!open) return null
+
   return (
     <div
       role="dialog"
@@ -51,7 +92,7 @@ export function NotificationCenter({ open, onClose }: { open: boolean; onClose: 
         position: 'fixed',
         top: '56px',
         right: '24px',
-        width: 'min(360px, 92vw)',
+        width: 'min(380px, 92vw)',
         maxHeight: '70vh',
         overflow: 'auto',
         zIndex: 850,
@@ -68,59 +109,100 @@ export function NotificationCenter({ open, onClose }: { open: boolean; onClose: 
           ×
         </button>
       </div>
-      {pending.length === 0 && (
-        <p style={{ fontSize: '13px', color: 'var(--color-on-surface-variant)', margin: 0 }}>暂无待签批。</p>
+      {groups.length === 0 && (
+        <p style={{ fontSize: '13px', color: 'var(--color-on-surface-variant)', margin: 0 }}>暂无通知。</p>
       )}
-      {pending.map((t) => (
-        <div
-          key={t.id}
-          style={{
-            padding: '12px',
-            marginBottom: '8px',
-            borderRadius: '10px',
-            border: '1px solid var(--color-error)',
-            fontSize: '13px',
-          }}
-        >
-          <div style={{ fontWeight: 600 }}>待签批 · {t.skill_name ?? 'task'}</div>
-          {t.message && <div style={{ marginTop: '4px', color: 'var(--color-on-surface-variant)' }}>{t.message}</div>}
-          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-            <button
-              type="button"
-              onClick={() => resolve(t.id, true)}
-              style={{
-                flex: 1,
-                padding: '8px',
-                borderRadius: '8px',
-                border: 'none',
-                background: 'var(--color-primary)',
-                color: 'var(--color-on-primary)',
-                cursor: 'pointer',
-                fontWeight: 600,
-              }}
-            >
-              批准
-            </button>
-            <button
-              type="button"
-              onClick={() => resolve(t.id, false)}
-              style={{
-                flex: 1,
-                padding: '8px',
-                borderRadius: '8px',
-                border: '1px solid var(--color-outline-variant)',
-                background: 'transparent',
-                cursor: 'pointer',
-              }}
-            >
-              拒绝
-            </button>
-          </div>
-        </div>
+      {groups.map((g) => (
+        <NotificationCard key={g.key} group={g} onResolve={resolve} />
       ))}
-      <p style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)', marginTop: '12px', marginBottom: 0 }}>
-        Sensor / 任务完成折叠规则将在后续迭代增强。
+      <p style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: '12px', marginBottom: 0 }}>
+        聚合规则：同一 Skill 1 小时内 ≥3 次完成会折叠（PRD §11.4）。
       </p>
     </div>
   )
+}
+
+function NotificationCard({
+  group,
+  onResolve,
+}: {
+  group: NotificationGroup
+  onResolve: (taskId: string, decision: 'approved' | 'rejected') => void
+}) {
+  const isSignoff = group.kind === 'signoff'
+  const tone =
+    group.kind === 'signoff'
+      ? 'var(--color-error)'
+      : group.kind === 'failed'
+        ? 'var(--color-error)'
+        : group.kind === 'aggregate'
+          ? 'var(--color-primary)'
+          : 'var(--color-outline-variant)'
+  return (
+    <div
+      data-kind={group.kind}
+      style={{
+        padding: '12px',
+        marginBottom: '8px',
+        borderRadius: '10px',
+        border: `1px solid ${tone}`,
+        fontSize: '13px',
+      }}
+    >
+      <div style={{ fontWeight: 600 }}>{group.title}</div>
+      {group.detail && (
+        <div style={{ marginTop: '4px', color: 'var(--color-on-surface-variant)' }}>{group.detail}</div>
+      )}
+      {group.kind === 'aggregate' && (
+        <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
+          共 {group.count} 条 · 最近一次 {formatRel(group.latestUpdatedAt)}
+        </div>
+      )}
+      {isSignoff && (
+        <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+          <button
+            type="button"
+            onClick={() => onResolve(group.taskIds[0], 'approved')}
+            style={{
+              flex: 1,
+              padding: '8px',
+              borderRadius: '8px',
+              border: 'none',
+              background: 'var(--color-primary)',
+              color: 'var(--color-on-primary)',
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            批准
+          </button>
+          <button
+            type="button"
+            onClick={() => onResolve(group.taskIds[0], 'rejected')}
+            style={{
+              flex: 1,
+              padding: '8px',
+              borderRadius: '8px',
+              border: '1px solid var(--color-outline-variant)',
+              background: 'transparent',
+              cursor: 'pointer',
+            }}
+          >
+            拒绝
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatRel(iso: string): string {
+  const t = new Date(iso).getTime()
+  if (!Number.isFinite(t)) return iso
+  const diff = Date.now() - t
+  const min = Math.round(diff / 60_000)
+  if (min < 1) return '刚刚'
+  if (min < 60) return `${min} 分钟前`
+  const hr = Math.round(min / 60)
+  return `${hr} 小时前`
 }

@@ -14,6 +14,8 @@ import {
   type LibrarySelectionEventDetail,
 } from '../../lib/librarySelection'
 import { QUICK_TEMPLATES } from '../../data/templates'
+import { usePendingSignoffs } from '../../hooks/usePendingSignoffs'
+import { SignoffCard } from '../signoff/SignoffCard'
 
 type ToolCall = { label: string; icon: string }
 
@@ -66,6 +68,15 @@ export function RightPanel() {
   const emitIslandEvent = useCallback((detail: IslandEvent) => {
     window.dispatchEvent(new CustomEvent<IslandEvent>(ISLAND_EVENT_NAME, { detail }))
   }, [])
+
+  // PRD §10.2 — pending sign-offs for the active Space (S-5 Sprint C).
+  const { pending: pendingSignoffs, resolve: resolveSignoff } = usePendingSignoffs(spaceId || null)
+  // Mirror sign-off count into Dynamic Island (red pulse).
+  useEffect(() => {
+    if (pendingSignoffs.length > 0) {
+      emitIslandEvent({ type: 'task.awaiting_signoff', pendingCount: pendingSignoffs.length })
+    }
+  }, [pendingSignoffs.length, emitIslandEvent])
 
   // Space switch must not leak old-space state across windows
   useEffect(() => {
@@ -507,6 +518,15 @@ export function RightPanel() {
           </div>
 
           <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '20px', minHeight: 0 }}>
+            {pendingSignoffs
+              .filter((t) => !activeSessionId || !t.sessionId || t.sessionId === activeSessionId)
+              .map((task) => (
+                <SignoffCard
+                  key={task.id}
+                  task={task}
+                  onResolve={(decision) => resolveSignoff(task.id, decision)}
+                />
+              ))}
             {messages.length === 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', marginTop: '40px', color: 'var(--color-on-surface-variant)' }}>
                 <span className="material-symbols-outlined" style={{ fontSize: '36px', opacity: 0.4 }}>smart_toy</span>

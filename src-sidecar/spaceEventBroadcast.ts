@@ -85,3 +85,50 @@ export function attachSkillSuggestedRuntimeBridge(
   })
   return () => sub.dispose()
 }
+
+/**
+ * Sprint C — generic per-space SSE bus used by TaskManager and Sign-off flow.
+ * Listeners subscribed via {@link subscribeSpaceEvents} only receive events
+ * whose `space_id` matches the requested scope.
+ */
+export interface SpaceScopedEvent {
+  type: string
+  space_id: string
+  [key: string]: unknown
+}
+
+const spaceListeners = new Map<string, Set<(event: SpaceScopedEvent) => void>>()
+
+export function subscribeSpaceEvents(
+  spaceId: string,
+  emit: (event: SpaceScopedEvent) => void,
+): () => void {
+  let set = spaceListeners.get(spaceId)
+  if (!set) {
+    set = new Set()
+    spaceListeners.set(spaceId, set)
+  }
+  set.add(emit)
+  return () => {
+    set!.delete(emit)
+    if (set!.size === 0) spaceListeners.delete(spaceId)
+  }
+}
+
+export function broadcastSpaceEvent(spaceId: string, event: Omit<SpaceScopedEvent, 'space_id'> & { space_id?: string }): void {
+  const set = spaceListeners.get(spaceId)
+  if (!set) return
+  const enriched: SpaceScopedEvent = { ...event, space_id: spaceId }
+  for (const emit of set) {
+    try {
+      emit(enriched)
+    } catch {
+      // listener errors must not poison broadcast
+    }
+  }
+}
+
+/** Test helper: clear all subscribers (used between tests). */
+export function _resetSpaceSubscribers(): void {
+  spaceListeners.clear()
+}

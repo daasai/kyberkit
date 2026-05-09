@@ -35,7 +35,7 @@ When asked to say hello, reply with: "Hello from KyberKit Skill!"
 `;
 
 const ENV_EXAMPLE_TEMPLATE = `# === Model Provider ===
-KYBER_MODEL_PROVIDER=anthropic
+# Kevin v1.5 §8.4 — Anthropic SDK 一统；KYBER_MODEL_PROVIDER 已废弃。
 KYBER_MODEL_NAME=claude-sonnet-4-20250514
 ANTHROPIC_API_KEY=
 

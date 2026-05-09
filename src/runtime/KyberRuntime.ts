@@ -444,6 +444,15 @@ export class KyberRuntime {
       );
       // MCP stays process-global; per RS-10, do not claim MCP fs root tracks Library until a request-level MCP spike.
       deps = { ...deps, tools: sessionTools, sandbox: sessionSandbox, executionCwd: absMount };
+
+      // Kevin v1.5 §12.5 — L1 progressive disclosure: append the Skill directory
+      // to this session's platformDirective, so the model sees (name, description)
+      // for every Skill visible to the current Space without paying for full bodies.
+      const dir = ctx.skillDirectory?.trim();
+      if (dir) {
+        const base = (deps.platformDirective ?? '').trim();
+        deps = { ...deps, platformDirective: base ? `${base}\n\n${dir}` : dir };
+      }
     }
 
     const trajEnabled = this.config.telemetry.trajectory.enabled !== false;

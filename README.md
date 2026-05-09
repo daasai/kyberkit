@@ -99,4 +99,23 @@ KyberKit 的目标是为开发者提供一个**“坚不可摧、绝对透明、
 
 ---
 
+## Kevin v1.5 (MVP-RC) — 桌面终端 & 边缘节点
+
+`Kevin v1.5` 是 KyberKit Agent 网络的桌面终端和边缘节点，落地在 `app/`（Tauri + React + Vite）与 `src-sidecar/`（Bun HTTP/SSE）。本仓库当前包含 **MVP-RC**（C 方案）全量交付，覆盖 Skill 三层加载、L1/L2 渐进披露、Skill Forge P0、LearningLoop Layer 1、Cron 调度、HITL Sign-off、审计 jsonl 与通知中心 1h 滚动窗聚合。
+
+```bash
+# 后端 + 运行时回归
+bun test src-sidecar/ src/runtime/ src/cli/ src/config/
+
+# 前端组件回归
+cd app && npx vitest run
+
+# MVP-RC 主链路 E2E（Forge → 调度 → Sign-off → 审计 → 通知聚合）
+bun test ./src-sidecar/e2e_mvp_rc.test.ts
+```
+
+完整规格：[`docs/specs/kevin1.5/README.md`](docs/specs/kevin1.5/README.md)（含 Rev3 路径契约、Skill / 任务 / Sign-off 契约与最新 [UAT 报告](docs/specs/kevin1.5/UAT/uat_mvp_rc_2026-05-09.md)）。
+
+---
+
 **KyberKit - Build with Control, Execute with Certainty.**

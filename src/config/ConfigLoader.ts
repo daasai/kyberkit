@@ -9,11 +9,10 @@ import { ConfigError } from '../types/errors.js';
  * Bun automatically loads `.env` before executing scripts.
  *
  * Environment Variables:
- *   Model:
- *     KYBER_MODEL_PROVIDER       - Provider name (default: 'anthropic')
+ *   Model (Kevin v1.5 §8.4 — Anthropic SDK 一统; KYBER_MODEL_PROVIDER 已废弃):
  *     KYBER_MODEL_NAME           - Model identifier (default: 'claude-sonnet-4-20250514')
  *     ANTHROPIC_API_KEY          - API key (required for Anthropic provider)
- *     KYBER_MODEL_BASE_URL       - Custom API base URL (optional)
+ *     KYBER_MODEL_BASE_URL       - Custom API base URL (optional, supports compatible gateways)
  *     KYBER_MODEL_MAX_TOKENS     - Max tokens per response (default: 4096)
  *
  *   Agent:
@@ -86,9 +85,10 @@ function buildConfigFromEnv(): Record<string, unknown> {
     }
   };
 
+  // Kevin v1.5 §8.4 — KYBER_MODEL_PROVIDER deprecated; always Anthropic SDK (default in schema).
   return {
     model: {
-      provider: process.env.KYBER_MODEL_PROVIDER,
+      // provider intentionally omitted; KyberConfigSchema defaults to 'anthropic'.
       name: process.env.KYBER_MODEL_NAME,
       apiKey: process.env.ANTHROPIC_API_KEY || process.env.KYBER_API_KEY,
       baseUrl: process.env.KYBER_MODEL_BASE_URL,
