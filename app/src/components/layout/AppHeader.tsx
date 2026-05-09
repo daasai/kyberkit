@@ -33,7 +33,11 @@ export function AppHeader({
     >
       {/* Left: Logo */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '15px', color: 'var(--color-on-surface)', minWidth: 0, flex: 1 }}>
-        <span className="material-symbols-outlined filled" style={{ color: 'var(--color-primary)', fontSize: '22px' }}>terminal</span>
+        <img
+          src="/kevin-logo.png"
+          alt="Kevin logo"
+          style={{ width: '22px', height: '22px', borderRadius: '4px', objectFit: 'contain' }}
+        />
         Kevin
       </div>
 
