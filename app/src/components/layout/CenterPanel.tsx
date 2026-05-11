@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { Editor, rootCtx, defaultValueCtx } from '@milkdown/core'
+import type { Dispatch, SetStateAction } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react'
+import { Editor, editorViewCtx, rootCtx, defaultValueCtx, serializerCtx } from '@milkdown/core'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
 import { gfm } from '@milkdown/kit/preset/gfm'
 import { history } from '@milkdown/kit/plugin/history'
@@ -10,12 +11,24 @@ import { useSession } from '../../contexts/SessionContext'
 import { KEVIN_FOCUS_CENTER_EVENT } from '../../lib/focusCenter'
 import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
 import { inferArtifactTitle, truncateTitle } from '../../lib/artifactTitle'
+import { joinLibraryFileRef, toLibraryRelativePath } from '../../lib/librarySelection'
+import { markdownSaveTargetPath } from '../../lib/markdownSaveTarget'
+import { WelcomeGuideCard } from '../onboarding/WelcomeGuideCard'
+import { LibraryDirPicker } from './LibraryDirPicker'
+
+function readWelcomeGuideDismissed(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('kevin:guide-seen') === '1'
+  } catch {
+    return false
+  }
+}
 
 const WELCOME_MARKDOWN = `# 欢迎使用 Kevin
 
-在右侧输入任务，或使用 **快速启动** 里的示例模板（仅为演示，不代表预装 Skill）。
+在右侧输入任务（仅为演示场景，不代表预装 Skill）。
 
-主产物与文档编辑在**中栏画布**；右侧为对话与过程追踪。
+主产物与文档编辑在**中栏画布**；右侧为对话，顶部为**本会话制品**列表（可打开到中栏）。
 
 ---
 
@@ -28,9 +41,30 @@ const WELCOME_MARKDOWN = `# 欢迎使用 Kevin
 示例模板与文案均为产品演示，**不表示**系统预装对应能力。
 `
 
-function MilkdownEditor({ content, streaming }: { content: string; streaming: boolean }) {
+export type MilkdownCanvasHandle = { getMarkdown: () => string }
+
+const MilkdownEditor = forwardRef<MilkdownCanvasHandle, { content: string; streaming: boolean; loadSeq: number }>(
+  function MilkdownEditor({ content, streaming, loadSeq }, ref) {
   const [, getEditor] = useInstance()
-  const lastMarkdown = useRef<string | null>(null)
+  const lastApplied = useRef<{ markdown: string; loadSeq: number } | null>(null)
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      getMarkdown: () => {
+        const editor = getEditor()
+        if (!editor) return ''
+        try {
+          const view = editor.ctx.get(editorViewCtx)
+          const serializer = editor.ctx.get(serializerCtx)
+          return serializer(view.state.doc)
+        } catch {
+          return ''
+        }
+      },
+    }),
+    [getEditor],
+  )
 
   useEditor((root) =>
     Editor.make()
@@ -47,7 +81,8 @@ function MilkdownEditor({ content, streaming }: { content: string; streaming: bo
   // Sync welcome or artifact — wait until ProseMirror is ready (getEditor is often null on first paint).
   useEffect(() => {
     const markdown = content.trim().length > 0 ? content : WELCOME_MARKDOWN
-    if (markdown === lastMarkdown.current) return
+    const prev = lastApplied.current
+    if (prev && prev.markdown === markdown && prev.loadSeq === loadSeq) return
 
     let cancelled = false
     let attempts = 0
@@ -57,7 +92,7 @@ function MilkdownEditor({ content, streaming }: { content: string; streaming: bo
       if (cancelled) return
       const editor = getEditor()
       if (editor) {
-        lastMarkdown.current = markdown
+        lastApplied.current = { markdown, loadSeq }
         editor.action(replaceAll(markdown))
         return
       }
@@ -71,7 +106,7 @@ function MilkdownEditor({ content, streaming }: { content: string; streaming: bo
     return () => {
       cancelled = true
     }
-  }, [content, getEditor])
+  }, [content, loadSeq, getEditor])
 
   return (
     <div style={{ position: 'relative' }}>
@@ -86,15 +121,76 @@ function MilkdownEditor({ content, streaming }: { content: string; streaming: bo
       <Milkdown />
     </div>
   )
+})
+
+MilkdownEditor.displayName = 'MilkdownEditor'
+
+export type CenterPanelProps = {
+  /** When provided (from AppShell), tab list survives Search / SkillStore routes that unmount CenterPanel. */
+  openTabIds?: string[]
+  setOpenTabIds?: Dispatch<SetStateAction<string[]>>
 }
 
-export function CenterPanel() {
-  const { artifact, loadArtifact, clearArtifact } = useArtifact()
-  const { sessions, activeSessionId, setActiveSessionId, spaceId } = useSession()
-  const [openTabIds, setOpenTabIds] = useState<string[]>([])
+export function CenterPanel({ openTabIds: openTabIdsProp, setOpenTabIds: setOpenTabIdsProp }: CenterPanelProps = {}) {
+  const { artifact, loadArtifact, clearArtifact, setSavedPath } = useArtifact()
+  const { sessions, activeSessionId, setActiveSessionId, spaceId, spaces } = useSession()
+  const [localOpenTabIds, setLocalOpenTabIds] = useState<string[]>([])
+  const openTabIds = openTabIdsProp ?? localOpenTabIds
+  const setOpenTabIds = setOpenTabIdsProp ?? setLocalOpenTabIds
   const [artifactTitleBySession, setArtifactTitleBySession] = useState<Record<string, string>>({})
   const [centerFlash, setCenterFlash] = useState(false)
+  const [welcomeGuideDismissed, setWelcomeGuideDismissed] = useState(readWelcomeGuideDismissed)
+  const [archiveMoveOpen, setArchiveMoveOpen] = useState(false)
+  const [archiveMoveErr, setArchiveMoveErr] = useState<string | null>(null)
+  const [archiveMoveBusy, setArchiveMoveBusy] = useState(false)
+  const [saveHint, setSaveHint] = useState<string | null>(null)
+  const [saveBusy, setSaveBusy] = useState(false)
   const canvasAnchorRef = useRef<HTMLDivElement>(null)
+  const milkdownRef = useRef<MilkdownCanvasHandle>(null)
+
+  const activeLibraryId = useMemo(
+    () => spaces.find((s) => s.id === spaceId)?.libraryId?.trim() ?? null,
+    [spaces, spaceId],
+  )
+
+  const handlePickArchiveDir = useCallback(
+    async (dirRef: string) => {
+      const from = artifact.savedPath?.trim()
+      if (!spaceId || !from) return
+      const base = from.split('/').filter(Boolean).pop() ?? ''
+      const toPath = joinLibraryFileRef(dirRef, base)
+      if (!toPath) {
+        setArchiveMoveErr('无法解析目标路径')
+        return
+      }
+      if (toPath === from) {
+        setArchiveMoveErr('文件已在所选文件夹')
+        return
+      }
+      setArchiveMoveBusy(true)
+      setArchiveMoveErr(null)
+      try {
+        const res = await fetch(`${SIDECAR_URL}/library/move${qsSpace(spaceId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fromPath: from, toPath }),
+        })
+        const data = (await res.json().catch(() => ({}))) as { error?: string; path?: string }
+        if (!res.ok) {
+          setArchiveMoveErr(typeof data.error === 'string' ? data.error : `移动失败 (${res.status})`)
+          return
+        }
+        const next = typeof data.path === 'string' ? data.path : toPath
+        setSavedPath(next)
+        setArchiveMoveOpen(false)
+      } catch {
+        setArchiveMoveErr('网络错误')
+      } finally {
+        setArchiveMoveBusy(false)
+      }
+    },
+    [artifact.savedPath, spaceId, setSavedPath],
+  )
 
   const onFocusCenterRequest = useCallback(() => {
     document.getElementById('kevin-center-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
@@ -113,12 +209,7 @@ export function CenterPanel() {
   useEffect(() => {
     if (!activeSessionId) return
     setOpenTabIds((prev) => (prev.includes(activeSessionId) ? prev : [...prev, activeSessionId]))
-  }, [activeSessionId])
-
-  const closeTab = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    setOpenTabIds(prev => prev.filter(tid => tid !== id))
-  }
+  }, [activeSessionId, setOpenTabIds])
 
   /** Keep Milkdown in sync when switching tabs (same as LeftSidebar session select). */
   const activateSessionTab = useCallback(
@@ -144,6 +235,29 @@ export function CenterPanel() {
     [setActiveSessionId, loadArtifact, clearArtifact, spaceId],
   )
 
+  const closeTab = useCallback(
+    (id: string, e: React.MouseEvent) => {
+      e.stopPropagation()
+      setOpenTabIds((prev) => {
+        const idx = prev.indexOf(id)
+        const filtered = prev.filter((tid) => tid !== id)
+        if (id === activeSessionId) {
+          if (filtered.length > 0) {
+            const pick = filtered[Math.max(0, idx - 1)] ?? filtered[0]
+            queueMicrotask(() => void activateSessionTab(pick))
+          } else {
+            queueMicrotask(() => {
+              setActiveSessionId(null)
+              clearArtifact()
+            })
+          }
+        }
+        return filtered
+      })
+    },
+    [activeSessionId, setOpenTabIds, activateSessionTab, setActiveSessionId, clearArtifact],
+  )
+
   // Keep tab title synced with the latest in-memory artifact while streaming/after completion.
   useEffect(() => {
     if (!artifact.sessionId) return
@@ -167,6 +281,40 @@ export function CenterPanel() {
 
   const displayContent = artifact.content || ''
   const isStreaming = artifact.streaming
+  const canvasLoadSeq = artifact.loadSeq
+  const showWelcomeGuide =
+    !welcomeGuideDismissed && !displayContent.trim() && !isStreaming
+
+  const mdSavePath = markdownSaveTargetPath(artifact)
+
+  /**
+   * 写回当前打开的库内 Markdown。不重命名路径：按标题生成文件名仅在侧栏
+   * `saveArtifact`（流式制品首次落盘）阶段执行，避免改动用户已命名的存量文档。
+   */
+  const handleSaveMarkdown = useCallback(async () => {
+    if (!spaceId || !mdSavePath || saveBusy) return
+    const body = milkdownRef.current?.getMarkdown() ?? ''
+    setSaveBusy(true)
+    setSaveHint(null)
+    try {
+      const res = await fetch(`${SIDECAR_URL}/library/write${qsSpace(spaceId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: mdSavePath, content: body }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) {
+        setSaveHint(typeof data.error === 'string' ? data.error : `保存失败 (${res.status})`)
+        return
+      }
+      setSaveHint('已保存')
+      window.setTimeout(() => setSaveHint(null), 2000)
+    } catch {
+      setSaveHint('网络错误')
+    } finally {
+      setSaveBusy(false)
+    }
+  }, [spaceId, mdSavePath, saveBusy])
 
   return (
     <div style={{
@@ -190,7 +338,7 @@ export function CenterPanel() {
         flexShrink: 0,
         overflowX: 'auto',
       }}>
-        <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+        <div role="tablist" aria-label="画布会话" style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
           {openTabIds.length === 0 ? (
             // Default welcome tab
             <div style={{
@@ -211,10 +359,18 @@ export function CenterPanel() {
             openTabIds.map(id => {
               const isActive = id === activeSessionId
               return (
-                <button
+                <div
                   key={id}
-                  type="button"
+                  role="tab"
+                  tabIndex={isActive ? 0 : -1}
+                  aria-selected={isActive}
                   onClick={() => void activateSessionTab(id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      void activateSessionTab(id)
+                    }
+                  }}
                   style={{
                     padding: '8px 12px',
                     fontSize: '13px', fontWeight: 500,
@@ -229,15 +385,17 @@ export function CenterPanel() {
                     transition: 'background 150ms, color 150ms',
                     maxWidth: '180px',
                     textAlign: 'left',
+                    outline: 'none',
                   }}
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: '14px', flexShrink: 0 }}>description</span>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
                     {getTabLabel(id)}
                   </span>
                   <button
                     onClick={e => closeTab(id, e)}
                     type="button"
+                    aria-label="关闭标签"
                     style={{
                       flexShrink: 0, background: 'transparent', border: 'none',
                       cursor: 'pointer', padding: '2px', borderRadius: '4px',
@@ -248,44 +406,111 @@ export function CenterPanel() {
                   >
                     <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>close</span>
                   </button>
-                </button>
+                </div>
               )
             })
           )}
         </div>
 
-        {/* Right actions */}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center', paddingBottom: '4px', flexShrink: 0 }}>
-          {['edit', 'more_horiz'].map(icon => (
-            <button key={icon} type="button" style={{
-              padding: '6px', background: 'transparent', border: 'none', borderRadius: '6px',
-              cursor: 'pointer', color: 'var(--color-on-surface-variant)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'background 150ms',
-            }}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>{icon}</span>
-            </button>
-          ))}
-          {/* Copy artifact button */}
-          {displayContent && (
-            <button
-              onClick={() => navigator.clipboard.writeText(displayContent)}
-              title="复制为 Markdown"
-              type="button"
-              style={{
-                padding: '4px 10px', background: 'transparent', border: '1px solid var(--color-outline-variant)',
-                borderRadius: '6px', cursor: 'pointer', color: 'var(--color-on-surface-variant)',
-                display: 'flex', alignItems: 'center', gap: '4px',
-                fontSize: '12px', transition: 'background 150ms',
-              }}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>content_copy</span>
-              复制
-            </button>
+        <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', paddingBottom: '4px', flexShrink: 0 }}>
+          {saveHint && (
+            <span style={{ fontSize: '11px', color: saveHint === '已保存' ? 'var(--color-primary)' : 'var(--color-error)' }}>{saveHint}</span>
           )}
+          <button
+            type="button"
+            title={mdSavePath ? '将当前 Markdown 写回文档库' : '仅 Markdown 文档可保存'}
+            disabled={!mdSavePath || saveBusy || isStreaming}
+            onClick={() => void handleSaveMarkdown()}
+            style={{
+              padding: '6px 14px',
+              background: !mdSavePath || saveBusy || isStreaming ? 'var(--color-surface-container)' : 'var(--color-primary)',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: !mdSavePath || saveBusy || isStreaming ? 'not-allowed' : 'pointer',
+              color: !mdSavePath || saveBusy || isStreaming ? 'var(--color-on-surface-variant)' : 'var(--color-on-primary)',
+              fontSize: '12px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>save</span>
+            保存
+          </button>
         </div>
       </div>
+
+      {artifact.savedPath && (
+        <div
+          style={{
+            flexShrink: 0,
+            padding: '10px 16px',
+            borderBottom: '1px solid var(--color-outline-variant)',
+            background: 'color-mix(in srgb, var(--color-primary) 8%, transparent)',
+            fontSize: '12px',
+            color: 'var(--color-on-surface)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--color-on-surface-variant)' }}>已保存至</span>
+            <code style={{ fontSize: '11px', wordBreak: 'break-all' }}>
+              {`@/${toLibraryRelativePath(artifact.savedPath)}`}
+            </code>
+            <button
+              type="button"
+              onClick={() => {
+                setArchiveMoveOpen((o) => {
+                  const next = !o
+                  if (next) setArchiveMoveErr(null)
+                  return next
+                })
+              }}
+              style={{
+                padding: '4px 10px',
+                fontSize: '12px',
+                borderRadius: '6px',
+                border: '1px solid var(--color-outline-variant)',
+                background: 'var(--color-surface)',
+                cursor: 'pointer',
+              }}
+            >
+              更改位置
+            </button>
+            <button
+              type="button"
+              onClick={() => setSavedPath(null)}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                color: 'var(--color-on-surface-variant)',
+              }}
+              title="关闭"
+            >
+              ×
+            </button>
+          </div>
+          {archiveMoveOpen && spaceId && (
+            <LibraryDirPicker
+              spaceId={spaceId}
+              libraryId={activeLibraryId}
+              open={archiveMoveOpen}
+              busy={archiveMoveBusy}
+              error={archiveMoveErr}
+              onClose={() => {
+                if (archiveMoveBusy) return
+                setArchiveMoveOpen(false)
+              }}
+              onPickDir={(dirRef) => {
+                void handlePickArchiveDir(dirRef)
+              }}
+            />
+          )}
+        </div>
+      )}
 
       {/* Scrollable Canvas */}
       <div
@@ -294,9 +519,22 @@ export function CenterPanel() {
         style={{ flex: 1, overflowY: 'auto', padding: '40px 48px' }}
       >
         <div id="kevin-center-canvas-anchor" ref={canvasAnchorRef} style={{ maxWidth: '800px', margin: '0 auto' }}>
-          <MilkdownProvider key={activeSessionId ?? 'welcome'}>
-            <MilkdownEditor content={displayContent} streaming={isStreaming} />
-          </MilkdownProvider>
+          {showWelcomeGuide ? (
+            <WelcomeGuideCard
+              onDismiss={() => {
+                try {
+                  localStorage.setItem('kevin:guide-seen', '1')
+                } catch {
+                  /* ignore */
+                }
+                setWelcomeGuideDismissed(true)
+              }}
+            />
+          ) : (
+            <MilkdownProvider key={activeSessionId ?? 'welcome'}>
+              <MilkdownEditor ref={milkdownRef} content={displayContent} streaming={isStreaming} loadSeq={canvasLoadSeq} />
+            </MilkdownProvider>
+          )}
         </div>
       </div>
 

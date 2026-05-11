@@ -17,15 +17,17 @@ export class DefaultMCPToolRegistry {
 
   /**
    * Connect to an MCP server and register its tools.
+   * @param rootOverride — Kevin Rev3: append paths (e.g. Library mount) to stdio spawn args so filesystem MCP roots match the active Space.
    */
-  async connect(config: MCPServerConfig): Promise<MCPConnection> {
+  async connect(config: MCPServerConfig, rootOverride?: string[]): Promise<MCPConnection> {
     if (config.transport !== 'stdio') {
       throw new Error(`Transport "${config.transport}" not yet supported.`);
     }
 
+    const extra = rootOverride?.filter((p) => p.trim().length > 0) ?? []
     const transport = new StdioClientTransport({
       command: config.command!,
-      args: config.args ?? [],
+      args: [...(config.args ?? []), ...extra],
     });
 
     const client = new Client({ name: 'kyberkit', version: '0.1.0' });
@@ -57,6 +59,14 @@ export class DefaultMCPToolRegistry {
     }
     this.connections.set(serverName, undefined as any);
     this.connections.delete(serverName);
+  }
+
+  /** Disconnect every MCP server (e.g. per-session registry cleanup). */
+  async disconnectAll(): Promise<void> {
+    const names = [...this.connections.keys()]
+    for (const name of names) {
+      await this.disconnect(name)
+    }
   }
 
   /**

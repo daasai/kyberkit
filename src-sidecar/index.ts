@@ -3,7 +3,10 @@
  *
  * Routes:
  *   GET  /health                       → health check
- *   GET  /spaces                      → list Space vault ids (under ~/.kyberkit/spaces)
+ *   GET  /spaces                      → list Spaces from Space–Library registry
+ *   PATCH /registry/spaces/:id        → rename Space (displayName)
+ *   DELETE /registry/spaces/:id        → remove Space binding + library session DB
+ *   POST /registry/pick-mount        → native folder dialog → absolute path (local Sidecar)
  *   GET  /sessions                     → list all sessions
  *   POST /sessions                     → create new session
  *   GET  /sessions/:id                 → get session details (with artifact)
@@ -12,14 +15,24 @@
  *   POST /chat (deprecated)            → legacy, routes to default session
  */
 
+import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'crypto'
-import { mkdirSync, readFileSync, statSync } from 'fs'
-import { resolve as resolvePath } from 'path'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'fs'
+import { dirname, join as pathJoin, resolve as resolvePath } from 'path'
 import { KyberRuntime } from '../src/runtime/KyberRuntime.js'
 import { SessionManager } from './SessionManager.js'
 import { ArtifactParser } from './ArtifactParser.js'
 import { summarizeArtifactMarkdown } from './artifactSummary.js'
-import { dbCountAllSessions, dbListChatMessages, dbPersistChatTurn } from './db.js'
+import {
+  dbCountAllSessions,
+  dbInsertSessionSavedArtifact,
+  dbListAllSessionsInSpace,
+  dbListChatMessages,
+  dbListSessionSavedArtifacts,
+  dbPersistChatTurn,
+  evictLibraryDatabase,
+} from './db.js'
+import type { SavedArtifactFile, SessionScope } from './SessionManager.js'
 import {
   attachSkillSuggestedRuntimeBridge,
   createSpaceEventBroadcaster,
@@ -30,7 +43,10 @@ import { CronScheduler } from './CronScheduler.js'
 import { makeCronOnTrigger, syncCronForSpace } from './cronBridge.js'
 import { appendAudit, kevinAuditDir } from '../src/runtime/audit/AuditLogger.js'
 import { previewFeishuDocDiff, runFeishuDocWriteMock } from './actuators/feishuDocWrite.js'
-import { join as pathJoin } from 'path'
+import {
+  extractTextFromBinaryFile,
+  isBinaryExtractablePath,
+} from '../src/util/binaryFileExtract.js'
 import {
   ensureKevinLayout,
   isUuidString,
@@ -38,18 +54,24 @@ import {
   listRegistrySpaces,
   listSpaceDocsTree,
   readSpaceLibraryRegistry,
+  removeSpaceLibraryBinding,
   resolveSpaceToLibrary,
+  updateSpaceLibraryDisplayName,
   upsertSpaceLibraryBinding,
 } from '../src/runtime/paths/PathResolver.js'
+import { pickLocalDirectoryWithDialog } from './pickLocalFolder.js'
+import { searchLibraryFiles } from './librarySearch.js'
 import {
   loadUserConfig,
   saveUserConfig,
+  applyUserConfigToEnv,
   forceApplyUserConfigToEnv,
 } from '../src/runtime/config/UserConfigStore.js'
 import { broadcastConfigChanged, subscribeConfigSse } from './configBroadcast.js'
 import { readProfile, writeProfile } from '../src/runtime/paths/PathResolver.js'
 import { loadSkillFull, scanSkillsForSpace } from './SkillScanner.js'
 import { acceptForgeDraft, suggestForgeDraft } from './SkillForge.js'
+import { distillForgeDraftWithLlm } from './forgeDistillLlm.js'
 import {
   appendStyleNote,
   composeSkillBody,
@@ -88,11 +110,13 @@ ensureKevinLayout()
 
 const PORT = 3001
 const startedAt = Date.now()
+/** Library 文件预览与上传的单文件大小上限（与 PRD 对齐：5MiB）。 */
 const MAX_PREVIEW_BYTES = 5 * 1024 * 1024
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  // PATCH: session pin/archive and other partial updates from the web UI (cross-origin preflight).
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
@@ -115,28 +139,8 @@ function listConnectorStatuses(): ConnectorStatus[] {
     process.env.BEEYI_DW_BASE_URL?.trim() &&
     process.env.BEEYI_DW_TOKEN?.trim()
   )
-  const canDiscoverSpaces = (() => {
-    try {
-      listRegistrySpaces()
-      return true
-    } catch {
-      return false
-    }
-  })()
 
   return [
-    {
-      name: 'Filesystem MCP',
-      status: canDiscoverSpaces ? 'healthy' : 'error',
-      lastSuccess: canDiscoverSpaces ? '刚刚' : '不可用',
-      source: 'live',
-    },
-    {
-      name: '系统监控 MCP',
-      status: 'healthy',
-      lastSuccess: '刚刚',
-      source: 'live',
-    },
     {
       name: '贝易转 DW',
       status: hasDwConfig ? 'healthy' : 'error',
@@ -146,6 +150,8 @@ function listConnectorStatuses(): ConnectorStatus[] {
   ]
 }
 
+// Merge GUI-persisted API key into env when .env has none (same source KyberRuntime / Forge use).
+applyUserConfigToEnv('default')
 console.log('[Kevin Sidecar] Bootstrapping KyberKit Runtime...')
 const runtime = new KyberRuntime()
 await runtime.bootstrap()
@@ -167,7 +173,7 @@ function ensureCronSynced(spaceId: string): void {
   }
 }
 for (const s of listRegistrySpaces()) {
-  ensureCronSynced(s.spaceId)
+  ensureCronSynced(s.id)
 }
 console.log('[Kevin Sidecar] SessionManager + TaskManager + CronScheduler ready.')
 
@@ -200,8 +206,6 @@ function readConfigPayload() {
     },
   }
 }
-
-type SessionScope = { spaceId: string; libraryId: string; mountPath: string }
 
 function createSpaceLibraryBinding(input: {
   mountPath?: string
@@ -267,6 +271,45 @@ function parseSelectedLibraryDirRef(scope: SessionScope, raw: unknown): string {
   return rel
 }
 
+/** One-turn prompt hint: UI 「文档库」selection → preferred relative write parent. */
+function recordSessionSavedArtifact(
+  libraryId: string,
+  sessionId: string,
+  artifactId: string | null,
+  saved: SavedArtifactFile | null,
+  summary: string,
+): void {
+  if (!saved || !artifactId) return
+  try {
+    dbInsertSessionSavedArtifact(libraryId, {
+      id: artifactId,
+      session_id: sessionId,
+      library_relative_path: saved.relativePath,
+      summary: summary.slice(0, 500),
+      created_at: new Date().toISOString(),
+    })
+  } catch (e) {
+    console.warn('[Sidecar] session_saved_artifacts insert failed:', e)
+  }
+}
+
+function buildLibraryUiTurnHint(selectedRelFromMount: string): string {
+  const rel = selectedRelFromMount.replaceAll('\\', '/').replace(/^\/+/, '')
+  if (rel) {
+    return [
+      '## 本轮 — 文档库选中位置',
+      '',
+      `用户在左侧「文档库」树里**当前选中的文件夹**（相对 Library 根）: \`${rel}\``,
+      `- 若用户只说「写入/保存到文档库」「放进资料库」而未给具体路径，**优先**把新文件写到: \`${rel}/<合适文件名>.md\`（可按正文标题命名）。`,
+    ].join('\n')
+  }
+  return [
+    '## 本轮 — 文档库选中位置',
+    '',
+    '- 用户当前未选中具体子文件夹（或停在 Library 根）。写入「文档库」时，将新文件放在相对根目录的合理路径（例如 `./文件名.md` 或既有子目录下）。',
+  ].join('\n')
+}
+
 function parseLibraryFileRef(scope: SessionScope, raw: unknown): string | null {
   if (typeof raw !== 'string') return null
   const v = raw.trim()
@@ -284,6 +327,31 @@ function isLikelyBinary(buf: Uint8Array): boolean {
     if (b === 0) return true
   }
   return false
+}
+
+const MAX_LIBRARY_WRITE_BYTES = 10 * 1024 * 1024
+
+function isMarkdownLibraryRel(rel: string): boolean {
+  return /\.(md|markdown|mdx)$/i.test(rel)
+}
+
+/** Open a file with the OS default viewer (Preview, Word, etc.). Sidecar runs locally next to the library mount. */
+function tryOpenPathInSystemViewer(absPath: string): { ok: boolean; error?: string } {
+  try {
+    const platform = process.platform
+    let result: ReturnType<typeof spawnSync>
+    if (platform === 'darwin') {
+      result = spawnSync('open', [absPath], { stdio: 'ignore' })
+    } else if (platform === 'win32') {
+      result = spawnSync('cmd', ['/c', 'start', '', absPath], { stdio: 'ignore', shell: true })
+    } else {
+      result = spawnSync('xdg-open', [absPath], { stdio: 'ignore' })
+    }
+    if (result.error) return { ok: false, error: result.error.message }
+    return { ok: true }
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
 }
 
 // Create a default session if none exists (for legacy /chat compatibility)
@@ -417,6 +485,53 @@ Bun.serve({
       return json(created.payload, 201)
     }
 
+    if (path === '/registry/pick-mount' && req.method === 'POST') {
+      const picked = pickLocalDirectoryWithDialog()
+      if (picked.path) return json({ path: picked.path })
+      if (picked.cancelled) return json({ path: null, cancelled: true })
+      return json({ path: null, error: picked.error ?? 'pick failed' }, 500)
+    }
+
+    const registrySpaceIdMatch = path.match(/^\/registry\/spaces\/([^/]+)$/)
+    if (registrySpaceIdMatch) {
+      const rawId = registrySpaceIdMatch[1].trim()
+      if (!isUuidString(rawId)) return json({ error: 'Invalid space id' }, 400)
+
+      if (req.method === 'PATCH') {
+        const body = await req.json().catch(() => ({})) as { displayName?: unknown }
+        if (typeof body.displayName !== 'string') {
+          return json({ error: 'displayName (string) is required' }, 400)
+        }
+        const updated = updateSpaceLibraryDisplayName(rawId, body.displayName)
+        if (!updated) return json({ error: 'Space not found' }, 404)
+        return json({
+          spaceId: updated.spaceId,
+          libraryId: updated.libraryId,
+          mountPath: updated.mountPath,
+          displayName: updated.displayName ?? null,
+        })
+      }
+
+      if (req.method === 'DELETE') {
+        const binding = resolveSpaceToLibrary(rawId)
+        if (!binding) return json({ error: 'Space not found' }, 404)
+        const scope: SessionScope = {
+          spaceId: binding.spaceId,
+          libraryId: binding.libraryId,
+          mountPath: binding.mountPath,
+        }
+        const sessionRows = dbListAllSessionsInSpace(binding.libraryId, binding.spaceId)
+        for (const row of sessionRows) {
+          await manager.delete(scope, row.id)
+        }
+        evictLibraryDatabase(binding.libraryId)
+        removeSpaceLibraryBinding(rawId)
+        cronScheduler.syncFromSkills(rawId, [])
+        cronSyncedSpaces.delete(rawId)
+        return json({ ok: true })
+      }
+    }
+
     // ── Connectors status (live aggregation) ──────────────────────────────────
     if (path === '/connectors' && req.method === 'GET') {
       return json(listConnectorStatuses())
@@ -437,6 +552,21 @@ Bun.serve({
         cron: s.cron ?? null,
       }))
       return json(list)
+    }
+
+    const skillFullMatch = path.match(/^\/skills\/([a-z0-9][a-z0-9-]*)\/full$/)
+    if (skillFullMatch && req.method === 'GET') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const full = loadSkillFull(scope.scope.spaceId, skillFullMatch[1])
+      if (!full) return json({ error: 'Skill not found' }, 404)
+      return json({
+        name: full.name,
+        description: full.description,
+        body: full.body,
+        scope: full.scope,
+        risk: full.risk,
+      })
     }
 
     // ── Cron — explicit re-sync (called after forge/promote/edit) ─────────────
@@ -486,14 +616,45 @@ Bun.serve({
       if (!scope.scope) return json({ error: scope.error }, scope.status)
       const body = (await req.json().catch(() => ({}))) as {
         message?: string
+        /** Full assistant text outside streamed artifact blocks (preferred for distill). */
+        assistantPlain?: string
+        /** Full final artifact markdown (preferred). */
+        assistantArtifact?: string
+        /** @deprecated Combined blob; used if plain/artifact absent. */
         assistantSummary?: string
       }
+      const plain = (body.assistantPlain ?? '').trim()
+      const artifact = (body.assistantArtifact ?? '').trim()
+      const legacy = (body.assistantSummary ?? '').trim()
+      const summaryForTrigger = [plain, artifact, legacy].filter(Boolean).join('\n\n').slice(0, 12_000)
+
       const draft = suggestForgeDraft({
         message: body.message ?? '',
-        assistantSummary: body.assistantSummary,
+        assistantSummary: summaryForTrigger || undefined,
       })
       if (!draft) return json({ trigger: null }, 200)
-      return json(draft)
+
+      const assistantPlain = plain || legacy
+      const assistantArtifact = artifact
+      if (!assistantPlain.trim() && !assistantArtifact.trim()) {
+        return json({
+          ...draft,
+          distilled: false,
+          distillError: 'no_assistant_content',
+        })
+      }
+
+      const dist = await distillForgeDraftWithLlm({
+        userMessage: body.message ?? '',
+        assistantPlain,
+        assistantArtifact,
+        seed: draft,
+      })
+      return json({
+        ...dist.draft,
+        distilled: dist.ok,
+        distillError: dist.ok ? undefined : dist.reason,
+      })
     }
 
     // ── Forge — accept (write SKILL.md to Space tier) ─────────────────────────
@@ -753,6 +914,119 @@ Bun.serve({
       }
     }
 
+    // ── Library full-text search (bounded scan, text-like files) ──────────────
+    if (path === '/library/search' && req.method === 'GET') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const q = url.searchParams.get('q')?.trim() ?? ''
+      if (q.length < 2) {
+        return json({ error: 'q must be at least 2 characters' }, 400)
+      }
+      try {
+        const hits = searchLibraryFiles(scope.scope, q)
+        return json({ hits })
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return json({ error: msg }, 500)
+      }
+    }
+
+    // ── Open library file in OS default app (PDF / Office; avoids streaming binary into UI) ──
+    if (path === '/library/open-external' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as { path?: string }
+      const rel = parseLibraryFileRef(scope.scope, body.path)
+      if (!rel) return json({ error: 'path must be a library file ref' }, 400)
+      const root = resolvePath(scope.scope.mountPath)
+      const abs = resolvePath(scope.scope.mountPath, rel)
+      if (!abs.startsWith(root)) return json({ error: 'path escapes library root' }, 400)
+      try {
+        if (!statSync(abs).isFile()) return json({ error: 'not a file' }, 400)
+      } catch {
+        return json({ error: 'not found' }, 404)
+      }
+      const opened = tryOpenPathInSystemViewer(abs)
+      if (!opened.ok) return json({ error: opened.error ?? 'open failed' }, 500)
+      return json({ ok: true })
+    }
+
+    // ── Write UTF-8 text to a library Markdown file (center panel Save) ───────
+    if (path === '/library/write' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as { path?: string; content?: string }
+      const rel = parseLibraryFileRef(scope.scope, body.path)
+      if (!rel || typeof body.content !== 'string') {
+        return json({ error: 'path and content (string) required' }, 400)
+      }
+      if (!isMarkdownLibraryRel(rel)) {
+        return json({ error: 'only .md / .markdown / .mdx files can be written through this API' }, 400)
+      }
+      const root = resolvePath(scope.scope.mountPath)
+      const abs = resolvePath(scope.scope.mountPath, rel)
+      if (!abs.startsWith(root)) return json({ error: 'path escapes library root' }, 400)
+      const buf = Buffer.from(body.content, 'utf-8')
+      if (buf.length > MAX_LIBRARY_WRITE_BYTES) {
+        return json({ error: 'content too large', maxBytes: MAX_LIBRARY_WRITE_BYTES }, 413)
+      }
+      try {
+        mkdirSync(dirname(abs), { recursive: true })
+        writeFileSync(abs, body.content, 'utf-8')
+      } catch (e: unknown) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 500)
+      }
+      return json({ ok: true, path: `@/libraries/${scope.scope.libraryId}/${rel}` })
+    }
+
+    // ── Upload file into Library (multipart: dir + file) ──────────────────────
+    if (path === '/library/upload' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      let form: FormData
+      try {
+        form = await req.formData()
+      } catch {
+        return json({ error: 'invalid multipart body' }, 400)
+      }
+      const dirRaw = form.get('dir')
+      const fileEntry = form.get('file')
+      if (!(fileEntry instanceof File)) {
+        return json({ error: 'multipart field "file" is required' }, 400)
+      }
+      if (fileEntry.size > MAX_PREVIEW_BYTES) {
+        return json(
+          { error: 'file too large', maxBytes: MAX_PREVIEW_BYTES, size: fileEntry.size },
+          413,
+        )
+      }
+      const rawName = (fileEntry.name || 'upload').replace(/[/\\]/g, '')
+      if (!rawName || rawName === '.' || rawName === '..') {
+        return json({ error: 'invalid file name' }, 400)
+      }
+      const relDir = parseSelectedLibraryDirRef(
+        scope.scope,
+        typeof dirRaw === 'string' ? dirRaw : '',
+      )
+      const rel = relDir ? `${relDir}/${rawName}` : rawName
+      const root = resolvePath(scope.scope.mountPath)
+      const abs = resolvePath(scope.scope.mountPath, rel)
+      if (!abs.startsWith(root)) {
+        return json({ error: 'path escapes library root' }, 400)
+      }
+      try {
+        const buf = Buffer.from(await fileEntry.arrayBuffer())
+        mkdirSync(dirname(abs), { recursive: true })
+        writeFileSync(abs, buf)
+      } catch (e: unknown) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 500)
+      }
+      return json({
+        ok: true,
+        path: `@/libraries/${scope.scope.libraryId}/${rel}`,
+      })
+    }
+
     // ── Library file preview (text) ───────────────────────────────────────────
     if (path === '/library/file' && req.method === 'GET') {
       const scope = resolveScopeFromUrl(url)
@@ -773,6 +1047,19 @@ Bun.serve({
           )
         }
         const raw = readFileSync(abs)
+        if (isBinaryExtractablePath(abs)) {
+          const extracted = await extractTextFromBinaryFile(abs)
+          if (extracted) {
+            const cap = MAX_PREVIEW_BYTES
+            const content =
+              extracted.length > cap ? `${extracted.slice(0, cap)}\n\n... [truncated]` : extracted
+            return json({
+              path: url.searchParams.get('path'),
+              content,
+              extracted: true,
+            })
+          }
+        }
         if (isLikelyBinary(raw)) {
           return json({ error: 'preview_unsupported', reason: 'binary', size: st.size }, 415)
         }
@@ -783,11 +1070,42 @@ Bun.serve({
       }
     }
 
+    // ── Move/rename file under Library mount (artifact archive UX) ────────────
+    if (path === '/library/move' && req.method === 'POST') {
+      const scope = resolveScopeFromUrl(url)
+      if (!scope.scope) return json({ error: scope.error }, scope.status)
+      const body = (await req.json().catch(() => ({}))) as { fromPath?: string; toPath?: string }
+      const fromRel = parseLibraryFileRef(scope.scope, body.fromPath)
+      const toRel = parseLibraryFileRef(scope.scope, body.toPath)
+      if (!fromRel || !toRel) {
+        return json({ error: 'fromPath and toPath must be @/libraries/<libraryId>/… refs' }, 400)
+      }
+      const root = resolvePath(scope.scope.mountPath)
+      const fromAbs = resolvePath(scope.scope.mountPath, fromRel)
+      const toAbs = resolvePath(scope.scope.mountPath, toRel)
+      if (!fromAbs.startsWith(root) || !toAbs.startsWith(root)) {
+        return json({ error: 'path escapes library root' }, 400)
+      }
+      try {
+        if (!statSync(fromAbs).isFile()) return json({ error: 'source is not a file' }, 400)
+      } catch {
+        return json({ error: 'source not found' }, 404)
+      }
+      try {
+        mkdirSync(dirname(toAbs), { recursive: true })
+        renameSync(fromAbs, toAbs)
+        return json({ ok: true, path: `@/libraries/${scope.scope.libraryId}/${toRel}` })
+      } catch (e: unknown) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 500)
+      }
+    }
+
     // ── List sessions ─────────────────────────────────────────────────────────
     if (path === '/sessions' && req.method === 'GET') {
       const scope = resolveScopeFromUrl(url)
       if (!scope.scope) return json({ error: scope.error }, scope.status)
-      return json(manager.list(scope.scope))
+      const archived = url.searchParams.get('archived') === '1'
+      return json(manager.list(scope.scope, { archived }))
     }
 
     // ── Create session ────────────────────────────────────────────────────────
@@ -806,8 +1124,7 @@ Bun.serve({
       if (req.method === 'GET') {
         const scope = resolveScopeFromUrl(url)
         if (!scope.scope) return json({ error: scope.error }, scope.status)
-        const sessions = manager.list(scope.scope)
-        const meta = sessions.find((s) => s.id === sessionId)
+        const meta = manager.getSessionMeta(scope.scope, sessionId)
         if (!meta) return json({ error: 'Session not found' }, 404)
         const artifact = manager.getArtifact(scope.scope, sessionId)
         const messages = dbListChatMessages(scope.scope.libraryId, sessionId).map((m) => ({
@@ -815,7 +1132,8 @@ Bun.serve({
           role: m.role,
           content: m.content,
         }))
-        return json({ ...meta, artifactContent: artifact, messages })
+        const savedArtifacts = dbListSessionSavedArtifacts(scope.scope.libraryId, sessionId)
+        return json({ ...meta, artifactContent: artifact, messages, savedArtifacts })
       }
 
       if (req.method === 'DELETE') {
@@ -824,6 +1142,25 @@ Bun.serve({
         const removed = await manager.delete(scope.scope, sessionId)
         if (!removed) return json({ error: 'Session not found' }, 404)
         return json({ ok: true })
+      }
+
+      if (req.method === 'PATCH') {
+        const scope = resolveScopeFromUrl(url)
+        if (!scope.scope) return json({ error: scope.error }, scope.status)
+        const meta = manager.getSessionMeta(scope.scope, sessionId)
+        if (!meta) return json({ error: 'Session not found' }, 404)
+        const body = (await req.json().catch(() => ({}))) as {
+          pinned?: boolean
+          archived?: boolean
+        }
+        if (typeof body.pinned === 'boolean') {
+          manager.pinSession(scope.scope, sessionId, body.pinned)
+        }
+        if (typeof body.archived === 'boolean') {
+          manager.archiveSession(scope.scope, sessionId, body.archived)
+        }
+        const next = manager.getSessionMeta(scope.scope, sessionId)
+        return json(next ?? meta)
       }
     }
 
@@ -890,7 +1227,9 @@ Bun.serve({
           })
 
           try {
-            for await (const event of session.send(userMessage)) {
+            for await (const event of session.send(userMessage, {
+              libraryUiHint: buildLibraryUiTurnHint(selectedLibraryDir),
+            })) {
               if (event.type === 'text_delta') {
                 // Feed through artifact parser
                 const derived = parser.feed(event.text)
@@ -907,6 +1246,14 @@ Bun.serve({
                     inArtifact = false
                     const summary = summarizeArtifactMarkdown(artifactAccum)
                     const saved = manager.saveArtifact(scope.scope, sessionId, artifactAccum, selectedLibraryDir)
+                    recordSessionSavedArtifact(
+                      scope.scope.libraryId,
+                      sessionId,
+                      currentArtifactId,
+                      saved,
+                      summary,
+                    )
+                    artifactAccum = ''
                     emit({
                       type: 'artifact_end',
                       sessionId,
@@ -916,7 +1263,7 @@ Bun.serve({
                     })
                     emit({
                       type: 'session_updated',
-                      session: manager.list(scope.scope).find((s) => s.id === sessionId),
+                      session: manager.getSessionMeta(scope.scope, sessionId),
                     })
                     currentArtifactId = null
                   } else if (e.type === 'text_delta') {
@@ -952,6 +1299,7 @@ Bun.serve({
 
             // Flush any buffered text in the parser
             const flushed = parser.flush()
+            const hadArtifactEndInFlush = flushed.some((e) => e.type === 'artifact_end')
             for (const e of flushed) {
               if (e.type === 'artifact_start') {
                 inArtifact = true
@@ -963,17 +1311,26 @@ Bun.serve({
                 emit({ type: 'artifact_delta', text: e.text })
               } else if (e.type === 'artifact_end') {
                 inArtifact = false
+                const summary = summarizeArtifactMarkdown(artifactAccum)
                 const saved = manager.saveArtifact(scope.scope, sessionId, artifactAccum, selectedLibraryDir)
+                recordSessionSavedArtifact(
+                  scope.scope.libraryId,
+                  sessionId,
+                  currentArtifactId,
+                  saved,
+                  summary,
+                )
+                artifactAccum = ''
                 emit({
                   type: 'artifact_end',
                   sessionId,
                   artifact_id: currentArtifactId,
-                  summary: summarizeArtifactMarkdown(artifactAccum),
+                  summary,
                   library_path: saved ? `@/libraries/${scope.scope.libraryId}/${saved.relativePath}` : null,
                 })
                 emit({
                   type: 'session_updated',
-                  session: manager.list(scope.scope).find((s) => s.id === sessionId),
+                  session: manager.getSessionMeta(scope.scope, sessionId),
                 })
                 currentArtifactId = null
               } else if (e.type === 'text_delta') {
@@ -984,20 +1341,30 @@ Bun.serve({
               }
             }
 
-            // If stream ended while still inside <artifact> (no closing tag), close once
-            if (inArtifact) {
+            // Parser.flush() already emits artifact_end when the stream ends inside <artifact>.
+            // Only recover if state is still inconsistent (no artifact_end was flushed).
+            if (inArtifact && !hadArtifactEndInFlush) {
               inArtifact = false
+              const summary = summarizeArtifactMarkdown(artifactAccum)
               const saved = manager.saveArtifact(scope.scope, sessionId, artifactAccum, selectedLibraryDir)
+              recordSessionSavedArtifact(
+                scope.scope.libraryId,
+                sessionId,
+                currentArtifactId,
+                saved,
+                summary,
+              )
+              artifactAccum = ''
               emit({
                 type: 'artifact_end',
                 sessionId,
                 artifact_id: currentArtifactId,
-                summary: summarizeArtifactMarkdown(artifactAccum),
+                summary,
                 library_path: saved ? `@/libraries/${scope.scope.libraryId}/${saved.relativePath}` : null,
               })
               emit({
                 type: 'session_updated',
-                session: manager.list(scope.scope).find((s) => s.id === sessionId),
+                session: manager.getSessionMeta(scope.scope, sessionId),
               })
               currentArtifactId = null
             }
@@ -1043,7 +1410,11 @@ console.log(`   POST   /config`)
 console.log(`   POST   /config/validate`)
 console.log(`   GET    /events/config`)
 console.log(`   GET    /spaces`)
+console.log(`   POST   /registry/pick-mount`)
+console.log(`   PATCH  /registry/spaces/:id`)
+console.log(`   DELETE /registry/spaces/:id`)
 console.log(`   GET    /skills          (L1 directory)`)
+console.log(`   GET    /skills/:name/full (raw SKILL.md body)`)
 console.log(`   GET    /skills/:name    (L2 full body)`)
 console.log(`   POST   /skills/forge/suggest`)
 console.log(`   POST   /skills/forge/accept`)
@@ -1056,6 +1427,11 @@ console.log(`   GET    /tasks`)
 console.log(`   POST   /tasks`)
 console.log(`   POST   /signoff/request`)
 console.log(`   POST   /signoff/:taskId`)
+console.log(`   GET    /library/search`)
+console.log(`   POST   /library/open-external`)
+console.log(`   POST   /library/write`)
+console.log(`   POST   /library/upload`)
+console.log(`   POST   /library/move`)
 console.log(`   GET    /events/space          (SSE)`)
 console.log(`   GET    /sessions`)
 console.log(`   POST   /sessions`)

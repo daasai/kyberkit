@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import { SIDECAR_URL } from '../../config/sidecarUrl'
 import { isUuidString } from '../../lib/isUuid'
+import { LibraryMountPathPicker } from '../common/LibraryMountPathPicker'
 
 const SPACE_STORAGE_KEY = 'kevin:active-space-id'
 
@@ -88,7 +89,7 @@ export function OnboardingWizard({ onComplete }: { onComplete: () => Promise<voi
   const submitLibraryStep = async () => {
     const mp = mountPath.trim()
     if (!mp) {
-      setErr('请填写文档库目录（绝对路径）')
+      setErr('请选择或填写文档库目录（绝对路径）')
       return
     }
     setBusy(true)
@@ -161,15 +162,16 @@ export function OnboardingWizard({ onComplete }: { onComplete: () => Promise<voi
       >
         {step === 'model' && (
           <>
-            <h1 style={{ margin: '0 0 8px', fontSize: '20px', fontWeight: 700 }}>欢迎使用 Kevin</h1>
-            <p style={{ margin: '0 0 20px', fontSize: '14px', color: 'var(--color-on-surface-variant)' }}>
+            <h1 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: 700 }}>欢迎使用 Kevin</h1>
+            <p style={{ margin: '0 0 18px', fontSize: '12px', lineHeight: 1.5, color: 'var(--color-on-surface-variant)' }}>
               选择模型并填入 API Key。下一步将绑定本地文档库目录。
             </p>
 
-            <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
+            <label htmlFor="onboarding-model" style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
               模型
             </label>
             <select
+              id="onboarding-model"
               value={modelName || modelDefault}
               onChange={(e) => setModelName(e.target.value)}
               style={{
@@ -188,10 +190,11 @@ export function OnboardingWizard({ onComplete }: { onComplete: () => Promise<voi
               ))}
             </select>
 
-            <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
+            <label htmlFor="onboarding-api-key" style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
               API Key
             </label>
             <input
+              id="onboarding-api-key"
               type="password"
               autoComplete="off"
               value={apiKey}
@@ -224,35 +227,42 @@ export function OnboardingWizard({ onComplete }: { onComplete: () => Promise<voi
             </button>
 
             {showAdvanced && (
-              <input
-                type="url"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="KYBER_MODEL_BASE_URL"
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  marginBottom: '16px',
-                  borderRadius: '8px',
-                  border: '1px solid var(--color-outline-variant)',
-                  fontSize: '14px',
-                }}
-              />
+              <>
+                <label htmlFor="onboarding-base-url" style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
+                  网关 Base URL
+                </label>
+                <input
+                  id="onboarding-base-url"
+                  type="url"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder="KYBER_MODEL_BASE_URL"
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    marginBottom: '16px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--color-outline-variant)',
+                    fontSize: '14px',
+                  }}
+                />
+              </>
             )}
           </>
         )}
 
         {step === 'library' && (
           <>
-            <h1 style={{ margin: '0 0 8px', fontSize: '20px', fontWeight: 700 }}>绑定文档库</h1>
-            <p style={{ margin: '0 0 20px', fontSize: '14px', color: 'var(--color-on-surface-variant)' }}>
+            <h1 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: 700 }}>绑定文档库</h1>
+            <p style={{ margin: '0 0 16px', fontSize: '12px', lineHeight: 1.5, color: 'var(--color-on-surface-variant)' }}>
               Rev3：文档库根目录为你选择的本地文件夹（Library 挂载）。会话与索引将写入对应库目录。
             </p>
 
-            <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
+            <label htmlFor="onboarding-library-label" style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
               显示名称（可选）
             </label>
             <input
+              id="onboarding-library-label"
               type="text"
               value={libraryLabel}
               onChange={(e) => setLibraryLabel(e.target.value)}
@@ -267,22 +277,11 @@ export function OnboardingWizard({ onComplete }: { onComplete: () => Promise<voi
               }}
             />
 
-            <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
-              文档库目录（绝对路径）
-            </label>
-            <input
-              type="text"
+            <LibraryMountPathPicker
               value={mountPath}
-              onChange={(e) => setMountPath(e.target.value)}
-              placeholder="/Users/you/Documents/KevinVault"
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                marginBottom: '16px',
-                borderRadius: '8px',
-                border: '1px solid var(--color-outline-variant)',
-                fontSize: '14px',
-              }}
+              onChange={setMountPath}
+              disabled={busy}
+              inputId="onboarding-mount-path"
             />
           </>
         )}

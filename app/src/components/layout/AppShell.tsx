@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels'
-import { AppHeader } from './AppHeader'
+import { AppHeader, type AppCenterModule } from './AppHeader'
 import { LeftSidebar } from './LeftSidebar'
 import { CenterPanel } from './CenterPanel'
 import { RightPanel } from './RightPanel'
@@ -11,6 +11,7 @@ import { GlobalSearchView } from '../search/GlobalSearchView'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
 import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
+import { KEVIN_FOCUS_CENTER_EVENT } from '../../lib/focusCenter'
 import { useDynamicIslandState, type IslandEvent } from '../../hooks/useDynamicIslandState'
 
 function ArtifactAutoLoader() {
@@ -21,7 +22,15 @@ function ArtifactAutoLoader() {
   activeIdRef.current = activeSessionId
 
   useEffect(() => {
-    if (!activeSessionId) return
+    void spaceId
+    loadedFor.current = null
+  }, [spaceId])
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      loadedFor.current = null
+      return
+    }
     // Don't reload if already loaded for this session, or if currently streaming
     if (loadedFor.current === activeSessionId && !artifact.streaming) return
     if (artifact.streaming) return
@@ -93,11 +102,17 @@ function ResizeHandle() {
 export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {}) {
   const savedSizes = getSavedSizes()
   const { spaceId } = useSession()
-  const [centerView, setCenterView] = useState<'editor' | 'skillstore' | 'automation'>('editor')
-  const [searchOpen, setSearchOpen] = useState(false)
+  /** Lives in AppShell so tabs survive temporary switches to Search / SkillStore / Automation (CenterPanel unmounts). */
+  const [centerOpenTabIds, setCenterOpenTabIds] = useState<string[]>([])
+  const [centerView, setCenterView] = useState<AppCenterModule>('editor')
   const [notifOpen, setNotifOpen] = useState(false)
   const [islandEvents, setIslandEvents] = useState<IslandEvent[]>([])
   const islandState = useDynamicIslandState(islandEvents)
+
+  useEffect(() => {
+    void spaceId
+    setCenterOpenTabIds([])
+  }, [spaceId])
 
   useEffect(() => {
     const ISLAND_EVENT = 'kevin:island-event'
@@ -108,6 +123,13 @@ export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {
     }
     window.addEventListener(ISLAND_EVENT, listener)
     return () => window.removeEventListener(ISLAND_EVENT, listener)
+  }, [])
+
+  /** RightPanel / library flows dispatch this when opening the canvas; ensure editor is visible (not Search/Skills). */
+  useEffect(() => {
+    const onFocusCenter = () => setCenterView('editor')
+    window.addEventListener(KEVIN_FOCUS_CENTER_EVENT, onFocusCenter)
+    return () => window.removeEventListener(KEVIN_FOCUS_CENTER_EVENT, onFocusCenter)
   }, [])
 
   const onLayout = useCallback((sizes: number[]) => {
@@ -124,6 +146,10 @@ export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {
         onOpenNotifications={() => setNotifOpen((v) => !v)}
         islandState={islandState}
         notifyBadge={islandState.mode === 'awaiting_signoff'}
+        centerModule={centerView}
+        onOpenSearch={() => setCenterView('search')}
+        onOpenSkillStore={() => setCenterView('skillstore')}
+        onOpenAutomation={() => setCenterView('automation')}
       />
       <NotificationCenter open={notifOpen} onClose={() => setNotifOpen(false)} />
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', minHeight: 0 }}>
@@ -134,11 +160,7 @@ export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {
         >
           <Panel defaultSize={savedSizes[0]} minSize={15} maxSize={30}>
             <div style={{ height: '100%', overflow: 'hidden' }}>
-              <LeftSidebar
-                onOpenSkillStore={() => setCenterView('skillstore')}
-                onOpenAutomation={() => setCenterView('automation')}
-                onOpenSearch={() => setSearchOpen(true)}
-              />
+              <LeftSidebar />
             </div>
           </Panel>
 
@@ -146,10 +168,12 @@ export function AppShell({ onOpenSettings }: { onOpenSettings?: () => void } = {
 
           <Panel defaultSize={savedSizes[1]} minSize={35}>
             <div id="kevin-center-panel" style={{ height: '100%', overflow: 'hidden', position: 'relative' }}>
-              {centerView === 'editor' && <CenterPanel />}
+              {centerView === 'editor' && (
+                <CenterPanel openTabIds={centerOpenTabIds} setOpenTabIds={setCenterOpenTabIds} />
+              )}
               {centerView === 'skillstore' && <SkillStore onBack={() => setCenterView('editor')} spaceId={spaceId} />}
               {centerView === 'automation' && <AutomationCenter spaceId={spaceId} onBack={() => setCenterView('editor')} />}
-              {searchOpen && <GlobalSearchView onBack={() => setSearchOpen(false)} />}
+              {centerView === 'search' && <GlobalSearchView onBack={() => setCenterView('editor')} />}
             </div>
           </Panel>
 

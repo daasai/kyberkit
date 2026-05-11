@@ -99,7 +99,7 @@ export function SettingsPanel({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0, fontSize: '18px' }}>设置</h2>
+          <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>设置</h2>
           <button
             type="button"
             onClick={onClose}
@@ -114,11 +114,11 @@ export function SettingsPanel({
             ×
           </button>
         </div>
-        <p style={{ fontSize: '13px', color: 'var(--color-on-surface-variant)', margin: '8px 0 16px' }}>
+        <p style={{ fontSize: '11px', lineHeight: 1.45, color: 'var(--color-on-surface-variant)', margin: '6px 0 14px' }}>
           修改 API Key 或模型后保存；留空 API Key 则保留已保存的密钥。
         </p>
 
-        <label style={{ fontSize: '12px', fontWeight: 600 }}>模型</label>
+        <label style={{ fontSize: '11px', fontWeight: 600 }}>模型</label>
         <select
           value={modelName || modelDefault}
           onChange={(e) => setModelName(e.target.value)}
@@ -128,6 +128,7 @@ export function SettingsPanel({
             margin: '6px 0 12px',
             borderRadius: '8px',
             border: '1px solid var(--color-outline-variant)',
+            fontSize: '13px',
           }}
         >
           {(modelList.length ? modelList : [modelDefault].filter(Boolean)).map((m) => (
@@ -137,7 +138,7 @@ export function SettingsPanel({
           ))}
         </select>
 
-        <label style={{ fontSize: '12px', fontWeight: 600 }}>API Key（可选覆盖）</label>
+        <label style={{ fontSize: '11px', fontWeight: 600 }}>API Key（可选覆盖）</label>
         <input
           type="password"
           autoComplete="off"
@@ -150,10 +151,11 @@ export function SettingsPanel({
             margin: '6px 0 12px',
             borderRadius: '8px',
             border: '1px solid var(--color-outline-variant)',
+            fontSize: '13px',
           }}
         />
 
-        <label style={{ fontSize: '12px', fontWeight: 600 }}>网关 Base URL</label>
+        <label style={{ fontSize: '11px', fontWeight: 600 }}>网关 Base URL</label>
         <input
           type="url"
           value={baseUrl}
@@ -165,11 +167,12 @@ export function SettingsPanel({
             margin: '6px 0 12px',
             borderRadius: '8px',
             border: '1px solid var(--color-outline-variant)',
+            fontSize: '13px',
           }}
         />
 
         {err && (
-          <div style={{ color: 'var(--color-error)', fontSize: '13px', marginBottom: '10px' }}>{err}</div>
+          <div style={{ color: 'var(--color-error)', fontSize: '11px', marginBottom: '10px' }}>{err}</div>
         )}
 
         <button
@@ -179,6 +182,7 @@ export function SettingsPanel({
           style={{
             width: '100%',
             padding: '10px',
+            fontSize: '13px',
             fontWeight: 600,
             borderRadius: '8px',
             border: 'none',

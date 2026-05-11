@@ -1,0 +1,63 @@
+@import 'tailwindcss';
+
+/* Claude Design–like 2B 浅色底 + Junior 深绿仅作强调色 */
+@theme {
+  --font-display: 'Instrument Serif', ui-serif, Georgia, serif;
+  --font-body: 'Montserrat', ui-sans-serif, system-ui, sans-serif;
+
+  --color-cd-page: #f7f6f3;
+  --color-cd-surface: #ffffff;
+  --color-cd-canvas: #f0f0f2;
+  --color-cd-border: #e8e6e1;
+  --color-cd-muted: #6b6863;
+
+  --color-j-brand: #3a5426;
+  --color-j-accent: #7aab5a;
+  --color-j-cream: #faf9f6;
+  --color-j-muted: #6b6863;
+  --color-j-ink: #111111;
+
+  --color-j-danger: #9b2335;
+  --color-j-danger-bg: #fdecef;
+  --color-j-warn: #8a5a00;
+  --color-j-warn-bg: #fff6e5;
+
+  /* CD-like composer Send accent (terracotta / salmon) */
+  --color-cd-send: #d9725c;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-j-ink);
+  background: var(--color-cd-page);
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.proto-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.proto-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-cd-muted) 35%, transparent);
+  border-radius: 9999px;
+}
+
+/* 细网格画布（示意 Claude Design canvas） */
+.cd-grid-canvas {
+  background-color: var(--color-cd-canvas);
+  background-image:
+    linear-gradient(to right, rgb(0 0 0 / 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(0 0 0 / 0.04) 1px, transparent 1px);
+  background-size: 20px 20px;
+}

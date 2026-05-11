@@ -15,6 +15,18 @@ interface ArtifactState {
   streaming: boolean
   /** Which session this artifact belongs to. */
   sessionId: string | null
+  /** Library ref path after last artifact_end save (e.g. `@/libraries/<id>/file.md`). */
+  savedPath: string | null
+  /**
+   * When the user opens a library Markdown file in the canvas, Save writes to this ref.
+   * Cleared when loading session artifacts or starting a new streamed artifact.
+   */
+  libraryFileRef: string | null
+  /**
+   * Bumped on each explicit canvas load (saved artifact, library file, session hydrate).
+   * Lets Milkdown re-apply when markdown text is unchanged (e.g. two saved versions with identical body).
+   */
+  loadSeq: number
 }
 
 interface ArtifactContextType {
@@ -24,7 +36,10 @@ interface ArtifactContextType {
   onArtifactEnd: () => void
   /** Load a saved artifact (e.g. when user clicks a past session). */
   loadArtifact: (sessionId: string, content: string) => void
+  /** Load a library file body for Milkdown; `libraryFileRef` enables Save back to disk. */
+  openLibraryDocument: (sessionId: string, content: string, libraryFileRef: string) => void
   clearArtifact: () => void
+  setSavedPath: (path: string | null) => void
 }
 
 const ArtifactContext = createContext<ArtifactContextType | null>(null)
@@ -34,10 +49,20 @@ export function ArtifactProvider({ children }: { children: ReactNode }) {
     content: '',
     streaming: false,
     sessionId: null,
+    savedPath: null,
+    libraryFileRef: null,
+    loadSeq: 0,
   })
 
   const onArtifactStart = useCallback((sessionId: string) => {
-    setArtifact({ content: '', streaming: true, sessionId })
+    setArtifact((prev) => ({
+      content: '',
+      streaming: true,
+      sessionId,
+      savedPath: null,
+      libraryFileRef: null,
+      loadSeq: prev.loadSeq + 1,
+    }))
   }, [])
 
   const onArtifactDelta = useCallback((text: string) => {
@@ -49,11 +74,33 @@ export function ArtifactProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const loadArtifact = useCallback((sessionId: string, content: string) => {
-    setArtifact({ content, streaming: false, sessionId })
+    setArtifact((prev) => ({
+      content,
+      streaming: false,
+      sessionId,
+      savedPath: null,
+      libraryFileRef: null,
+      loadSeq: prev.loadSeq + 1,
+    }))
+  }, [])
+
+  const openLibraryDocument = useCallback((sessionId: string, content: string, libraryFileRef: string) => {
+    setArtifact((prev) => ({
+      content,
+      streaming: false,
+      sessionId,
+      savedPath: null,
+      libraryFileRef,
+      loadSeq: prev.loadSeq + 1,
+    }))
   }, [])
 
   const clearArtifact = useCallback(() => {
-    setArtifact({ content: '', streaming: false, sessionId: null })
+    setArtifact({ content: '', streaming: false, sessionId: null, savedPath: null, libraryFileRef: null, loadSeq: 0 })
+  }, [])
+
+  const setSavedPath = useCallback((path: string | null) => {
+    setArtifact((prev) => ({ ...prev, savedPath: path, libraryFileRef: path ? null : prev.libraryFileRef }))
   }, [])
 
   return (
@@ -63,7 +110,9 @@ export function ArtifactProvider({ children }: { children: ReactNode }) {
       onArtifactDelta,
       onArtifactEnd,
       loadArtifact,
+      openLibraryDocument,
       clearArtifact,
+      setSavedPath,
     }}>
       {children}
     </ArtifactContext.Provider>

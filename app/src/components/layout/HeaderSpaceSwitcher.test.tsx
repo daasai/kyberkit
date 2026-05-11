@@ -1,13 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { LeftSidebar } from './LeftSidebar'
+import { HeaderSpaceSwitcher } from './HeaderSpaceSwitcher'
 
 vi.mock('../../contexts/SessionContext', () => ({
   useSession: vi.fn(),
-}))
-
-vi.mock('../../contexts/ArtifactContext', () => ({
-  useArtifact: () => ({ clearArtifact: vi.fn() }),
 }))
 
 import { useSession } from '../../contexts/SessionContext'
@@ -25,7 +21,10 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
       { id: SPACE_A, label: '默认 Space' },
       { id: SPACE_B, label: 'Beta Space' },
     ],
-    refreshSpaces: vi.fn().mockResolvedValue(undefined),
+    refreshSpaces: vi.fn().mockResolvedValue([
+      { id: SPACE_A, label: '默认 Space' },
+      { id: SPACE_B, label: 'Beta Space' },
+    ]),
     sessions: [
       { id: 's1', title: 'Chat One', createdAt: iso(120_000), updatedAt: iso(60_000) },
       { id: 's2', title: 'Chat Two', createdAt: iso(300_000), updatedAt: iso(30_000) },
@@ -35,25 +34,28 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
     createSession: vi.fn(async () => 'new'),
     deleteSession: vi.fn(async () => {}),
     refreshSessions: vi.fn(async () => {}),
+    pinSession: vi.fn(async () => {}),
     createSpaceLibrary: vi.fn(async () => ({ id: SPACE_A, label: '默认 Space' })),
+    updateSpaceDisplayName: vi.fn(async () => {}),
+    deleteSpace: vi.fn(async () => {}),
     openSpaceInNewWindow: vi.fn(async () => 'focused' as const),
     ...overrides,
   } as ReturnType<typeof useSession>
 }
 
-describe('LeftSidebar Space switcher', () => {
+describe('HeaderSpaceSwitcher', () => {
   beforeEach(() => {
     vi.mocked(useSession).mockReturnValue(baseSessionMock())
   })
 
   it('shows current Space label on the anchor', () => {
-    render(<LeftSidebar />)
+    render(<HeaderSpaceSwitcher />)
     const btn = screen.getByTestId('space-switcher')
     expect(btn).toHaveTextContent('默认 Space')
   })
 
   it('opens menu with Space rows and manage action', () => {
-    render(<LeftSidebar />)
+    render(<HeaderSpaceSwitcher />)
     fireEvent.click(screen.getByTestId('space-switcher'))
     const menu = screen.getByTestId('space-switcher-menu')
     expect(menu).toBeInTheDocument()
@@ -65,7 +67,7 @@ describe('LeftSidebar Space switcher', () => {
   it('selecting another Space calls setSpaceId in current window', () => {
     const setSpaceId = vi.fn()
     vi.mocked(useSession).mockReturnValue(baseSessionMock({ setSpaceId }))
-    render(<LeftSidebar />)
+    render(<HeaderSpaceSwitcher />)
     fireEvent.click(screen.getByTestId('space-switcher'))
     const menu = screen.getByTestId('space-switcher-menu')
     const items = within(menu).getAllByRole('menuitem')
@@ -75,7 +77,7 @@ describe('LeftSidebar Space switcher', () => {
 
   it('manage action opens space manager panel', () => {
     vi.mocked(useSession).mockReturnValue(baseSessionMock())
-    render(<LeftSidebar />)
+    render(<HeaderSpaceSwitcher />)
     fireEvent.click(screen.getByTestId('space-switcher'))
     const menu = screen.getByTestId('space-switcher-menu')
     fireEvent.click(within(menu).getByText('管理 Space…'))

@@ -22,6 +22,8 @@ const CN_EXPLICIT_PATTERNS = [
   /以后都这样/u,
   /把这个流程记下来/u,
   /每次.+都要/u,
+  /** e.g. 「记住这个流程：…」— common UAT phrasing; previously only 「把这个流程记下来」 matched. */
+  /记住.+流程/u,
 ]
 
 export interface ForgeTriggerInput {

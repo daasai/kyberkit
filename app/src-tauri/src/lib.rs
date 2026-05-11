@@ -327,6 +327,10 @@ pub fn run() {
     .setup(|app| {
       app
         .handle()
+        .plugin(tauri_plugin_dialog::init())
+        .map_err(|e| e.to_string())?;
+      app
+        .handle()
         .plugin(
           tauri_plugin_log::Builder::default()
             .level(if cfg!(debug_assertions) {

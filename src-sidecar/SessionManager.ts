@@ -24,10 +24,13 @@ import {
   dbGetSession,
   dbListChatMessages,
   dbListSessions,
+  dbSetSessionArchived,
+  dbSetSessionPinned,
   dbUpdateSessionTitle,
   dbUpsertArtifact,
   type SessionRow,
 } from './db.js'
+import { extractMarkdownTitleForFilename, pickUniqueMarkdownFileName } from './artifactFilename.js'
 
 export interface SessionMeta {
   id: string
@@ -35,6 +38,8 @@ export interface SessionMeta {
   createdAt: string
   updatedAt: string
   artifactPreview?: string
+  pinned?: boolean
+  archived?: boolean
 }
 
 export interface SessionScope {
@@ -75,8 +80,8 @@ function executionContextForScope(scope: SessionScope, sessionId: string): Agent
     libraryTechRoot: absTech,
     cwd: absMount,
     allowedRoots: [absMount, absTech],
-    // RS-10 deferred: MCP filesystem root remains process-global for now.
-    mcpRoots: [],
+    // Kevin Rev3: stdio MCP servers receive mount path(s) appended to spawn args.
+    mcpRoots: [absMount],
     sessionId,
     skillDirectory,
   }
@@ -89,6 +94,8 @@ function rowToMeta(row: SessionRow, artifactPreview?: string): SessionMeta {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     artifactPreview,
+    pinned: Number(row.pinned) === 1,
+    archived: Number(row.archived) === 1,
   }
 }
 
@@ -149,12 +156,28 @@ export class SessionManager {
     return session
   }
 
-  /** List all sessions with artifact previews. */
-  list(scope: SessionScope): SessionMeta[] {
-    return dbListSessions(scope.libraryId, scope.spaceId).map((row) => {
+  /** List sessions with artifact previews (default: non-archived; `archived: true` for archive view). */
+  list(scope: SessionScope, opts?: { archived?: boolean }): SessionMeta[] {
+    return dbListSessions(scope.libraryId, scope.spaceId, opts).map((row) => {
       const artifact = dbGetArtifact(scope.libraryId, row.id)
       return rowToMeta(row, artifact.slice(0, 120) || undefined)
     })
+  }
+
+  /** Session metadata regardless of pin/archive (for GET /sessions/:id). */
+  getSessionMeta(scope: SessionScope, sessionId: string): SessionMeta | null {
+    const row = dbGetSession(scope.libraryId, scope.spaceId, sessionId)
+    if (!row) return null
+    const artifact = dbGetArtifact(scope.libraryId, sessionId)
+    return rowToMeta(row, artifact.slice(0, 120) || undefined)
+  }
+
+  pinSession(scope: SessionScope, sessionId: string, pinned: boolean): void {
+    dbSetSessionPinned(scope.libraryId, scope.spaceId, sessionId, pinned)
+  }
+
+  archiveSession(scope: SessionScope, sessionId: string, archived: boolean): void {
+    dbSetSessionArchived(scope.libraryId, scope.spaceId, sessionId, archived)
   }
 
   /** Get the full artifact content for a session. */
@@ -162,7 +185,11 @@ export class SessionManager {
     return dbGetArtifact(scope.libraryId, sessionId)
   }
 
-  /** Save/update artifact content after generation completes and persist a markdown file under Library mount. */
+  /**
+   * Save artifact after streaming `artifact_end` (creation only).
+   * File name is derived from the Markdown title + collision suffix; the UI
+   * `/library/write` path must not auto-rename, so users’ existing files stay stable.
+   */
   saveArtifact(
     scope: SessionScope,
     sessionId: string,
@@ -175,8 +202,8 @@ export class SessionManager {
     const targetDir = relDir ? resolve(baseDir, relDir) : baseDir
     if (!targetDir.startsWith(baseDir)) return null
     mkdirSync(targetDir, { recursive: true })
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const fileName = `artifact-${sessionId.slice(0, 8)}-${stamp}.md`
+    const titleBase = extractMarkdownTitleForFilename(content) || '未命名制品'
+    const fileName = pickUniqueMarkdownFileName(targetDir, titleBase)
     const file = join(targetDir, fileName)
     writeFileSync(file, content, 'utf-8')
     const relativePath = relDir ? `${relDir}/${fileName}` : fileName

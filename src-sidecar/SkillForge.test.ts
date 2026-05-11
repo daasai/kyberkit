@@ -40,6 +40,17 @@ describe('SkillForge — P0 trigger detection (suggestForgeDraft)', () => {
     expect(draft!.suggestedName.length).toBeGreaterThan(0)
   })
 
+  it('detects 「记住这个流程」UAT phrasing (not only 把这个流程记下来)', () => {
+    const draft = suggestForgeDraft({
+      message: '记住这个流程：在文档库中检索某个主题，并编写成汇编文档的过程。',
+      assistantSummary: '文档检索与汇编工作流程',
+    })
+    expect(draft).not.toBeNull()
+    expect(draft!.trigger).toBe('explicit')
+    // slugify strips CJK from summary tokens → fallback slug
+    expect(draft!.suggestedName).toMatch(/^(untitled-skill|[a-z0-9-]+)$/)
+  })
+
   it('detects "save as skill" English explicit trigger', () => {
     const draft = suggestForgeDraft({
       message: 'Please save this as a skill called daily-brief',

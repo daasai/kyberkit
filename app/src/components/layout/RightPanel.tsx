@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent } from 'react'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
 import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
@@ -6,6 +6,7 @@ import { summarizeArtifactMarkdown } from '../../lib/artifactSummary'
 import { requestFocusKevinCenter } from '../../lib/focusCenter'
 import {
   KEVIN_LIBRARY_SELECTION_EVENT,
+  collectLibraryFileRefsInMessage,
   emitLibrarySelection,
   formatDirectoryBadge,
   getSelectedLibraryDir,
@@ -13,11 +14,74 @@ import {
   toParentLibraryDir,
   type LibrarySelectionEventDetail,
 } from '../../lib/librarySelection'
-import { QUICK_TEMPLATES } from '../../data/templates'
 import { usePendingSignoffs } from '../../hooks/usePendingSignoffs'
 import { SignoffCard } from '../signoff/SignoffCard'
+import { SlashCommandMenu, type SlashSkillHint } from './SlashCommandMenu'
+import { ForgeSuggestionCard, type ForgeDraft } from '../skill-store/ForgeSuggestionCard'
+import { AtFilePicker } from './AtFilePicker'
+import { ChatMarkdown } from '../chat/ChatMarkdown'
+import { visibleAssistantFromMessage } from '../../lib/assistantMessageVisibleText'
 
 type ToolCall = { label: string; icon: string }
+
+/** UAT-003: collapse noisy tool / narration rows in chat when many or very long. */
+const TOOL_CALL_COLLAPSE_MIN_ITEMS = 4
+const TOOL_CALL_COLLAPSE_MIN_CHARS = 360
+const ASSISTANT_COLLAPSE_MIN_CHARS = 2000
+
+function shouldCollapseToolCalls(calls: ToolCall[]): boolean {
+  if (calls.length >= TOOL_CALL_COLLAPSE_MIN_ITEMS) return true
+  const chars = calls.reduce((n, c) => n + c.label.length, 0)
+  return chars >= TOOL_CALL_COLLAPSE_MIN_CHARS
+}
+
+function toolCallsExpandedForMessage(
+  messageId: string,
+  calls: ToolCall[],
+  overrides: Record<string, boolean>,
+): boolean {
+  if (Object.hasOwn(overrides, messageId)) return overrides[messageId]
+  return !shouldCollapseToolCalls(calls)
+}
+
+function assistantMarkdownExpandedForMessage(
+  messageId: string,
+  visibleMarkdown: string,
+  overrides: Record<string, boolean>,
+): boolean {
+  if (visibleMarkdown.length <= ASSISTANT_COLLAPSE_MIN_CHARS) return true
+  if (Object.hasOwn(overrides, messageId)) return overrides[messageId]
+  return false
+}
+
+async function expandLibraryMentionsInMessage(
+  text: string,
+  spaceId: string | null,
+  libraryId: string | null,
+): Promise<string> {
+  if (!spaceId) return text
+  const paths = collectLibraryFileRefsInMessage(text, libraryId)
+  if (paths.length === 0) return text
+  const blocks: string[] = []
+  for (const p of paths) {
+    const u = new URL(`${SIDECAR_URL}/library/file`)
+    u.searchParams.set('space_id', spaceId)
+    u.searchParams.set('path', p)
+    const res = await fetch(u.toString())
+    const data = (await res.json().catch(() => ({}))) as { content?: string; error?: string }
+    if (!res.ok || typeof data.content !== 'string') {
+      blocks.push(
+        `\n\n---\nFile: ${p}\n(无法读取: ${typeof data.error === 'string' ? data.error : `HTTP ${res.status}`})\n`,
+      )
+    } else {
+      const cap = 120_000
+      const c =
+        data.content.length > cap ? `${data.content.slice(0, cap)}\n\n...[truncated]` : data.content
+      blocks.push(`\n\n---\nFile: ${p}\n\n${c}\n`)
+    }
+  }
+  return text + blocks.join('')
+}
 
 type ArtifactStrip = {
   id: string
@@ -38,7 +102,10 @@ type SessionArtifactEntry = {
   id: string
   createdAt: string
   summary: string
+  /** In-memory body when known; otherwise load via `libraryRef`. */
   content: string
+  /** Sidecar `@/libraries/<id>/…` ref after save; used to lazy-load body. */
+  libraryRef?: string | null
 }
 
 type IslandEvent =
@@ -49,21 +116,41 @@ type IslandEvent =
 
 const ISLAND_EVENT_NAME = 'kevin:island-event'
 
+/** 与 Sidecar `/library/upload` 及预览上限一致（5MiB）。 */
+const MAX_LIBRARY_FILE_BYTES = 5 * 1024 * 1024
+
 export function RightPanel() {
-  const { activeSessionId, createSession, refreshSessions, spaceId } = useSession()
-  const { onArtifactStart, onArtifactDelta, onArtifactEnd, loadArtifact, artifact } = useArtifact()
+  const { activeSessionId, createSession, refreshSessions, spaceId, spaces } = useSession()
+  const { onArtifactStart, onArtifactDelta, onArtifactEnd, loadArtifact, artifact, setSavedPath } = useArtifact()
 
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [sendHint, setSendHint] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'chat' | 'quick'>('chat')
   const [currentDirPath, setCurrentDirPath] = useState<string | null>(getSelectedLibraryDir(spaceId))
   const [artifactsBySession, setArtifactsBySession] = useState<Record<string, SessionArtifactEntry[]>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const uploadInputRef = useRef<HTMLInputElement>(null)
   /** When true, skip hydrating chat from Sidecar (avoids wiping optimistic rows right after createSession). */
   const streamingRef = useRef(false)
   const artifactDraftRef = useRef('')
+  /** Assistant text outside artifact stream (text_delta only) — sent to forge distill. */
+  const assistantForgePlainRef = useRef('')
+  /** Final artifact markdown from last artifact_end (full). */
+  const assistantForgeArtifactRef = useRef('')
+
+  const [atPickerOpen, setAtPickerOpen] = useState(false)
+  const [skillsForSlash, setSkillsForSlash] = useState<SlashSkillHint[]>([])
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
+  const [forgeDraft, setForgeDraft] = useState<ForgeDraft | null>(null)
+  const [toolCallsExpandedByMsg, setToolCallsExpandedByMsg] = useState<Record<string, boolean>>({})
+  const [assistantExpandedByMsg, setAssistantExpandedByMsg] = useState<Record<string, boolean>>({})
+
+  const activeLibraryId = useMemo(
+    () => spaces.find((s) => s.id === spaceId)?.libraryId?.trim() ?? null,
+    [spaces, spaceId],
+  )
 
   const emitIslandEvent = useCallback((detail: IslandEvent) => {
     window.dispatchEvent(new CustomEvent<IslandEvent>(ISLAND_EVENT_NAME, { detail }))
@@ -99,6 +186,118 @@ export function RightPanel() {
     }
   }, [spaceId])
 
+  const firstInputLine = (input.split('\n')[0] ?? '').trimStart()
+  const slashActive = firstInputLine.startsWith('/')
+  const slashQuery = slashActive ? firstInputLine.slice(1) : ''
+
+  const filteredSlashSkills = useMemo(() => {
+    const q = slashQuery.trim().toLowerCase()
+    if (!q) return skillsForSlash
+    return skillsForSlash.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.description ?? '').toLowerCase().includes(q),
+    )
+  }, [skillsForSlash, slashQuery])
+
+  const slashFilterKey = useMemo(
+    () => `${slashQuery}\0${filteredSlashSkills.map((s) => s.name).join('\n')}`,
+    [slashQuery, filteredSlashSkills],
+  )
+  useEffect(() => {
+    void slashFilterKey
+    setSlashSelectedIndex(0)
+  }, [slashFilterKey])
+
+  useEffect(() => {
+    if (!slashActive || !spaceId) return
+    let cancelled = false
+    void fetch(`${SIDECAR_URL}/skills${qsSpace(spaceId)}`)
+      .then((r) => r.json())
+      .then((rows: unknown) => {
+        if (cancelled) return
+        if (!Array.isArray(rows)) {
+          setSkillsForSlash([])
+          return
+        }
+        setSkillsForSlash(
+          rows.map((r) => {
+            const o = r as { name?: string; description?: string }
+            return { name: String(o.name ?? ''), description: String(o.description ?? '') }
+          }).filter((s) => s.name.length > 0),
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setSkillsForSlash([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [slashActive, spaceId])
+
+  const insertAtCursor = useCallback((snippet: string) => {
+    const el = textareaRef.current
+    if (!el) {
+      setInput((prev) => prev + snippet)
+      return
+    }
+    const start = el.selectionStart ?? 0
+    const end = el.selectionEnd ?? 0
+    setInput((prev) => prev.slice(0, start) + snippet + prev.slice(end))
+    const pos = start + snippet.length
+    requestAnimationFrame(() => {
+      try {
+        el.focus()
+        el.setSelectionRange(pos, pos)
+      } catch {
+        /* ignore */
+      }
+    })
+  }, [])
+
+  const handleLibraryFilesChosen = useCallback(
+    async (list: FileList | null) => {
+      if (!list?.length || !spaceId) return
+      const dir = currentDirPath?.trim()
+      if (!dir) {
+        setSendHint('请先在左侧文档库选中要上传到的文件夹')
+        return
+      }
+      for (let i = 0; i < list.length; i++) {
+        const f = list.item(i)
+        if (f && f.size > MAX_LIBRARY_FILE_BYTES) {
+          setSendHint(`单个文件不能超过 5MB：${f.name}`)
+          return
+        }
+      }
+      for (let i = 0; i < list.length; i++) {
+        const file = list.item(i)
+        if (!file) continue
+        const fd = new FormData()
+        fd.append('dir', dir)
+        fd.append('file', file)
+        try {
+          const res = await fetch(`${SIDECAR_URL}/library/upload${qsSpace(spaceId)}`, {
+            method: 'POST',
+            body: fd,
+          })
+          const data = (await res.json().catch(() => ({}))) as { error?: string; path?: string }
+          if (!res.ok) {
+            setSendHint(typeof data.error === 'string' ? data.error : `上传失败 (${res.status})`)
+            return
+          }
+          const p = typeof data.path === 'string' ? data.path : ''
+          if (p) insertAtCursor(`${p} `)
+        } catch {
+          setSendHint('上传失败：网络错误')
+          return
+        }
+      }
+      setSendHint(null)
+    },
+    [spaceId, currentDirPath, insertAtCursor],
+  )
+
   // Load persisted chat when the active session changes (keeps RightPanel in sync with LeftSidebar)
   useEffect(() => {
     let cancelled = false
@@ -115,6 +314,12 @@ export function RightPanel() {
           messages?: Array<{ role: string; content: string }>
           artifactContent?: string
           updatedAt?: string
+          savedArtifacts?: Array<{
+            id: string
+            library_relative_path: string | null
+            summary: string
+            created_at: string
+          }>
         }
         const rows = data.messages ?? []
         const loaded: Message[] = rows.map((m, idx) => ({
@@ -126,25 +331,44 @@ export function RightPanel() {
 
         const sid = activeSessionId
         const art = (data.artifactContent ?? '').trim()
+        const libId = activeLibraryId
         if (!cancelled && sid) {
-          const pid = `persisted-${sid}`
-          setArtifactsBySession((prev) => {
-            const cur = prev[sid] ?? []
-            if (!art) {
-              return { ...prev, [sid]: cur.filter((e) => e.id !== pid) }
-            }
-            const entry: SessionArtifactEntry = {
-              id: pid,
-              createdAt: data.updatedAt ?? new Date().toISOString(),
-              summary: summarizeArtifactMarkdown(art),
-              content: data.artifactContent ?? '',
-            }
-            const hasP = cur.some((e) => e.id === pid)
-            if (hasP) {
-              return { ...prev, [sid]: cur.map((e) => (e.id === pid ? entry : e)) }
-            }
-            return { ...prev, [sid]: [entry, ...cur] }
-          })
+          const savedRows = data.savedArtifacts
+          if (Array.isArray(savedRows) && savedRows.length > 0) {
+            setArtifactsBySession((prev) => ({
+              ...prev,
+              [sid]: savedRows.map((r) => ({
+                id: r.id,
+                createdAt: r.created_at,
+                summary: (r.summary ?? '').trim() || '产物',
+                content: '',
+                libraryRef:
+                  r.library_relative_path && libId
+                    ? `@/libraries/${libId}/${String(r.library_relative_path).replace(/^\/+/, '')}`
+                    : null,
+              })),
+            }))
+          } else {
+            const pid = `persisted-${sid}`
+            setArtifactsBySession((prev) => {
+              const cur = prev[sid] ?? []
+              if (!art) {
+                return { ...prev, [sid]: cur.filter((e) => e.id !== pid) }
+              }
+              const entry: SessionArtifactEntry = {
+                id: pid,
+                createdAt: data.updatedAt ?? new Date().toISOString(),
+                summary: summarizeArtifactMarkdown(art),
+                content: data.artifactContent ?? '',
+                libraryRef: null,
+              }
+              const hasP = cur.some((e) => e.id === pid)
+              if (hasP) {
+                return { ...prev, [sid]: cur.map((e) => (e.id === pid ? entry : e)) }
+              }
+              return { ...prev, [sid]: [entry, ...cur] }
+            })
+          }
         }
       } catch {
         if (!cancelled) setMessages([])
@@ -154,7 +378,36 @@ export function RightPanel() {
     return () => {
       cancelled = true
     }
-  }, [activeSessionId, spaceId])
+  }, [activeSessionId, spaceId, activeLibraryId])
+
+  const openSessionArtifactEntry = useCallback(
+    async (entry: SessionArtifactEntry) => {
+      if (!activeSessionId || !spaceId) return
+      if (entry.content.trim().length > 0) {
+        loadArtifact(activeSessionId, entry.content)
+        requestFocusKevinCenter()
+        return
+      }
+      const ref = entry.libraryRef?.trim()
+      if (!ref) return
+      try {
+        const u = new URL(`${SIDECAR_URL}/library/file`)
+        u.searchParams.set('space_id', spaceId)
+        u.searchParams.set('path', ref)
+        const res = await fetch(u.toString())
+        const body = (await res.json().catch(() => ({}))) as { content?: string; error?: string }
+        if (!res.ok || typeof body.content !== 'string') {
+          setSendHint(typeof body.error === 'string' ? body.error : `无法打开制品 (${res.status})`)
+          return
+        }
+        loadArtifact(activeSessionId, body.content)
+        requestFocusKevinCenter()
+      } catch {
+        setSendHint('无法打开制品：网络错误')
+      }
+    },
+    [activeSessionId, spaceId, loadArtifact],
+  )
 
   const openStripInCenter = useCallback(
     (sessionId: string, strip: ArtifactStrip) => {
@@ -171,6 +424,12 @@ export function RightPanel() {
     const trimmed = text.trim()
     if (!trimmed || isStreaming) return
 
+    setForgeDraft(null)
+    assistantForgePlainRef.current = ''
+    assistantForgeArtifactRef.current = ''
+
+    const messageForModel = await expandLibraryMentionsInMessage(trimmed, spaceId, activeLibraryId)
+
     let sessionId = activeSessionId
     if (!sessionId) {
       sessionId = await createSession()
@@ -178,7 +437,6 @@ export function RightPanel() {
 
     streamingRef.current = true
     emitIslandEvent({ type: 'task.started', taskName: 'Processing request' })
-    setActiveTab('chat')
     setSendHint(null)
     setMessages(prev => [
       ...prev,
@@ -193,7 +451,7 @@ export function RightPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: trimmed,
+          message: messageForModel,
           selectedLibraryDir: getSelectedLibraryDir(spaceId),
         }),
       })
@@ -250,6 +508,7 @@ export function RightPanel() {
 
             if (event.type === 'artifact_start') {
               artifactDraftRef.current = ''
+              assistantForgeArtifactRef.current = ''
               const aid = typeof event.artifact_id === 'string' ? event.artifact_id : crypto.randomUUID()
               onArtifactStart(sessionId)
               setMessages(prev => {
@@ -276,6 +535,7 @@ export function RightPanel() {
               const generatedLibraryPath =
                 typeof event.library_path === 'string' ? event.library_path : null
               onArtifactEnd()
+              if (generatedLibraryPath) setSavedPath(generatedLibraryPath)
               emitIslandEvent({ type: 'task.completed', summary: summary || 'Artifact ready' })
               refreshSessions()
               if (generatedLibraryPath) {
@@ -294,6 +554,7 @@ export function RightPanel() {
                   createdAt: new Date().toISOString(),
                   summary,
                   content: snap,
+                  libraryRef: generatedLibraryPath ?? null,
                 }
                 return { ...prev, [sid]: [nextEntry, ...list.filter(e => e.id !== aid)] }
               })
@@ -305,7 +566,12 @@ export function RightPanel() {
                 updated[updated.length - 1] = last
                 return updated
               })
+              assistantForgeArtifactRef.current = snap.trim()
               continue
+            }
+
+            if (event.type === 'text_delta' && typeof event.text === 'string') {
+              assistantForgePlainRef.current += event.text
             }
 
             setMessages(prev => {
@@ -340,6 +606,45 @@ export function RightPanel() {
           }
         }
       }
+
+      if (spaceId && trimmed) {
+        try {
+          const r = await fetch(`${SIDECAR_URL}/skills/forge/suggest${qsSpace(spaceId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: trimmed,
+              assistantPlain: assistantForgePlainRef.current,
+              assistantArtifact: assistantForgeArtifactRef.current,
+            }),
+          })
+          if (r.ok) {
+            const data = (await r.json()) as {
+              trigger?: string | null
+              suggestedName?: string
+              suggestedDescription?: string
+              bodySeed?: string
+              distilled?: boolean
+              distillError?: string
+            }
+            if (
+              data &&
+              typeof data.trigger === 'string' &&
+              data.trigger.length > 0 &&
+              typeof data.suggestedName === 'string' &&
+              typeof data.suggestedDescription === 'string' &&
+              typeof data.bodySeed === 'string'
+            ) {
+              setForgeDraft({
+                ...data,
+                trigger: data.trigger as ForgeDraft['trigger'],
+              } as ForgeDraft)
+            }
+          }
+        } catch {
+          /* ignore forge suggest */
+        }
+      }
     } catch {
       setSendHint('无法连接到 Kevin 服务（Sidecar 未启动？）')
       setMessages(prev => {
@@ -358,13 +663,100 @@ export function RightPanel() {
       setIsStreaming(false)
       emitIslandEvent({ type: 'task.completed', summary: 'Task completed' })
     }
-  }, [activeSessionId, isStreaming, createSession, onArtifactStart, onArtifactDelta, onArtifactEnd, refreshSessions, emitIslandEvent, spaceId])
+  }, [
+    activeSessionId,
+    isStreaming,
+    createSession,
+    onArtifactStart,
+    onArtifactDelta,
+    onArtifactEnd,
+    setSavedPath,
+    refreshSessions,
+    emitIslandEvent,
+    spaceId,
+    activeLibraryId,
+  ])
 
-  const handleSend = () => sendMessage(input)
+  const applySlashSelection = useCallback(
+    async (skill: SlashSkillHint) => {
+      if (!spaceId || !skill.name) return
+      const lines = input.split('\n')
+      const tail = lines.slice(1).join('\n').trimStart()
+      const res = await fetch(
+        `${SIDECAR_URL}/skills/${encodeURIComponent(skill.name)}/full${qsSpace(spaceId)}`,
+      )
+      const data = (await res.json().catch(() => ({}))) as { body?: string; error?: string }
+      if (!res.ok) {
+        setSendHint(typeof data.error === 'string' ? data.error : `无法加载 Skill (${res.status})`)
+        return
+      }
+      const body = typeof data.body === 'string' ? data.body : ''
+      const parts: string[] = []
+      if (tail) parts.push(tail)
+      parts.push('---', `Skill: ${skill.name}`, body)
+      const composed = parts.join('\n')
+      setInput('')
+      await sendMessage(composed)
+    },
+    [input, spaceId, sendMessage],
+  )
+
+  const handleSend = useCallback(() => {
+    if (slashActive && filteredSlashSkills.length > 0) {
+      const pick = filteredSlashSkills[slashSelectedIndex] ?? filteredSlashSkills[0]
+      void applySlashSelection(pick)
+      return
+    }
+    void sendMessage(input)
+  }, [
+    slashActive,
+    filteredSlashSkills,
+    slashSelectedIndex,
+    applySlashSelection,
+    sendMessage,
+    input,
+  ])
+
+  const handleTextareaKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (slashActive && filteredSlashSkills.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          setSlashSelectedIndex((i) => Math.min(i + 1, filteredSlashSkills.length - 1))
+          return
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          setSlashSelectedIndex((i) => Math.max(0, i - 1))
+          return
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setInput((prev) => {
+            const lines = prev.split('\n')
+            if (lines[0]?.trimStart().startsWith('/')) {
+              lines[0] = lines[0].replace(/^\s*\/\S*/, '').replace(/^\s+/, '')
+            }
+            return lines.join('\n')
+          })
+          return
+        }
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault()
+          const pick = filteredSlashSkills[slashSelectedIndex] ?? filteredSlashSkills[0]
+          void applySlashSelection(pick)
+          return
+        }
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        handleSend()
+      }
+    },
+    [slashActive, filteredSlashSkills, slashSelectedIndex, applySlashSelection, handleSend],
+  )
 
   const sessionArtifactList = activeSessionId ? (artifactsBySession[activeSessionId] ?? []) : []
-  const lastAi = [...messages].reverse().find((m) => m.role === 'ai')
-  const processToolCalls = lastAi?.toolCalls ?? []
   const currentDirTitle = toLibraryRelativePath(currentDirPath) || '根目录'
   const currentDirBadge = formatDirectoryBadge(currentDirPath, 40)
 
@@ -376,71 +768,7 @@ export function RightPanel() {
       display: 'flex',
       flexDirection: 'column',
     }}>
-      {/* Tabs */}
-      <div style={{
-        display: 'flex',
-        borderBottom: '1px solid var(--color-outline-variant)',
-        backgroundColor: 'var(--color-surface)',
-        flexShrink: 0,
-      }}>
-        {([
-          { key: 'chat', label: '对话' },
-          { key: 'quick', label: '快速启动' },
-        ] as const).map(({ key, label }) => (
-          <button
-            type="button"
-            key={key}
-            onClick={() => setActiveTab(key)}
-            style={{
-              flex: 1, padding: '12px', textAlign: 'center',
-              fontSize: '13px', fontWeight: 500,
-              background: 'transparent', border: 'none', cursor: 'pointer',
-              color: activeTab === key ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
-              borderBottom: activeTab === key ? '2px solid var(--color-primary)' : '2px solid transparent',
-              transition: 'color 150ms, border-color 150ms',
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Quick-start tab */}
-      {activeTab === 'quick' && (
-        <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <p style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)', margin: '0 0 4px' }}>
-            以下为示例任务模板，不代表预装 Skill。发送后 Kevin 会在中栏画布生成产物。
-          </p>
-          {QUICK_TEMPLATES.map(t => (
-            <button
-              type="button"
-              key={t.id}
-              disabled={isStreaming}
-              onClick={() => {
-                void sendMessage(t.prompt)
-              }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '12px',
-                padding: '14px', borderRadius: '12px', cursor: isStreaming ? 'not-allowed' : 'pointer',
-                border: '1px solid var(--color-outline-variant)',
-                background: 'var(--color-surface-container-lowest)',
-                textAlign: 'left', transition: 'background 150ms, border-color 150ms',
-                opacity: isStreaming ? 0.5 : 1,
-              }}
-              onMouseEnter={e => { if (!isStreaming) { (e.currentTarget as HTMLElement).style.background = 'var(--color-surface-container)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--color-primary)' } }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'var(--color-surface-container-lowest)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--color-outline-variant)' }}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '20px', color: 'var(--color-primary)', flexShrink: 0 }}>{t.icon}</span>
-              <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--color-on-surface)' }}>{t.label}</span>
-              <span className="material-symbols-outlined" style={{ fontSize: '16px', color: 'var(--color-on-surface-variant)', marginLeft: 'auto' }}>arrow_forward</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Chat tab */}
-      {activeTab === 'chat' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div
             data-testid="process-tracker"
             style={{
@@ -453,50 +781,84 @@ export function RightPanel() {
               gap: '8px',
             }}
           >
-            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-on-surface)' }}>过程追踪</div>
-            <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-              {isStreaming ? '执行中…' : '空闲'}
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-on-surface)' }}>本会话制品</div>
+            <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', lineHeight: 1.4 }}>
+              {isStreaming ? 'Kevin 正在回复…（工具与步骤见下方气泡，可折叠）' : '就绪'}
             </div>
-            {processToolCalls.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '120px', overflowY: 'auto' }}>
-                {processToolCalls.map((t) => (
+            {sessionArtifactList.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '11px', color: 'var(--color-on-surface-variant)', lineHeight: 1.45 }}>
+                本轮尚无已落库的 Markdown 等产物；生成后会列在此处，可一键在中栏打开编辑。
+              </p>
+            ) : (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                  maxHeight: 'min(42vh, 320px)',
+                  overflowY: 'auto',
+                }}
+              >
+                {sessionArtifactList.map((entry) => (
                   <div
-                    key={`${t.icon}-${t.label}`}
+                    key={entry.id}
                     style={{
-                      fontSize: '11px',
-                      color: 'var(--color-on-surface-variant)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      padding: '6px 8px',
+                      borderRadius: '8px',
                       background: 'var(--color-surface-container-lowest)',
-                      padding: '4px 8px',
-                      borderRadius: '6px',
+                      border: '1px solid var(--color-outline-variant)',
                     }}
                   >
-                    {t.icon === 'build' ? `工具: ${t.label}` : t.label}
+                    <div
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '2px',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          color: 'var(--color-on-surface)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={entry.summary}
+                      >
+                        {entry.summary || '产物'}
+                      </span>
+                      <span style={{ fontSize: '10px', color: 'var(--color-on-surface-variant)' }}>
+                        {entry.createdAt.slice(0, 19).replace('T', ' ')}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void openSessionArtifactEntry(entry)
+                      }}
+                      style={{
+                        flexShrink: 0,
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: 'var(--color-primary)',
+                        color: 'var(--color-on-primary)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      画布中打开
+                    </button>
                   </div>
                 ))}
-              </div>
-            )}
-            {sessionArtifactList.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  中栏画布已有 {sessionArtifactList.length} 项产物（主视图在中栏）
-                </span>
-                <button
-                  type="button"
-                  onClick={() => requestFocusKevinCenter()}
-                  style={{
-                    flexShrink: 0,
-                    padding: '4px 10px',
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    borderRadius: '6px',
-                    border: '1px solid var(--color-outline-variant)',
-                    background: 'var(--color-surface-container-lowest)',
-                    cursor: 'pointer',
-                    color: 'var(--color-primary)',
-                  }}
-                >
-                  聚焦中栏
-                </button>
               </div>
             )}
           </div>
@@ -531,7 +893,7 @@ export function RightPanel() {
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', marginTop: '40px', color: 'var(--color-on-surface-variant)' }}>
                 <span className="material-symbols-outlined" style={{ fontSize: '36px', opacity: 0.4 }}>smart_toy</span>
                 <p style={{ fontSize: '13px', textAlign: 'center', lineHeight: '1.6', opacity: 0.7, maxWidth: '200px' }}>
-                  向 Kevin 提问，或在「快速启动」选择一个场景模板。
+                  在下方输入框向 Kevin 提问，或使用 @、/ 引用文档与命令。
                 </p>
               </div>
             )}
@@ -565,10 +927,9 @@ export function RightPanel() {
                     </div>
                   )}
                   {(() => {
-                    const visibleAssistant = msg.content
-                      .replace(/\n*__ARTIFACT_PLACEHOLDER__\n*/g, '\n')
-                      .replace(/__ARTIFACT_PLACEHOLDER__/g, '')
-                      .trimEnd()
+                    const artifactStreaming = msg.artifactStrip?.status === 'streaming'
+                    const visibleAssistant = visibleAssistantFromMessage(msg.content, artifactStreaming)
+                    const hasVisibleNarration = visibleAssistant.trim().length > 0
                     const showCard = !!(msg.content || (msg.toolCalls && msg.toolCalls.length > 0) || msg.artifactStrip)
                     if (!showCard) return null
                     return (
@@ -593,24 +954,129 @@ export function RightPanel() {
                             <span className="material-symbols-outlined" style={{ fontSize: '12px', color: 'var(--color-on-primary)' }}>smart_toy</span>
                           </div>
 
-                          {msg.toolCalls && msg.toolCalls.length > 0 && (
-                            <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                              {msg.toolCalls.map((t) => (
-                                <div key={`${t.icon}-${t.label}`} style={{
-                                  fontSize: '11px', color: 'var(--color-on-surface-variant)',
-                                  background: 'var(--color-surface-container-lowest)',
-                                  padding: '3px 8px', borderRadius: '4px',
-                                  display: 'inline-flex', alignItems: 'center', gap: '4px', alignSelf: 'flex-start',
-                                }}>
-                                  <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>{t.icon}</span>
-                                  {t.icon === 'build' ? `Using tool: ${t.label}` : t.label}
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                          {msg.toolCalls && msg.toolCalls.length > 0 && (() => {
+                            const calls = msg.toolCalls
+                            const toolExpanded = toolCallsExpandedForMessage(msg.id, calls, toolCallsExpandedByMsg)
+                            const toolBusy = shouldCollapseToolCalls(calls)
+                            return (
+                              <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                {toolBusy && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setToolCallsExpandedByMsg((p) => ({
+                                        ...p,
+                                        [msg.id]: !toolCallsExpandedForMessage(msg.id, calls, p),
+                                      }))
+                                    }
+                                    style={{
+                                      alignSelf: 'flex-start',
+                                      fontSize: '11px',
+                                      fontWeight: 600,
+                                      padding: '4px 10px',
+                                      borderRadius: '999px',
+                                      border: '1px solid var(--color-outline-variant)',
+                                      background: 'var(--color-surface-container-lowest)',
+                                      color: 'var(--color-primary)',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    {toolExpanded ? '收起过程与工具' : `展开过程与工具（${calls.length} 条）`}
+                                  </button>
+                                )}
+                                {(toolExpanded || !toolBusy) && (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    {calls.map((t, ti) => (
+                                      <div
+                                        key={`${msg.id}-${ti}-${t.label.slice(0, 40)}`}
+                                        style={{
+                                          fontSize: '11px',
+                                          color: 'var(--color-on-surface-variant)',
+                                          background: 'var(--color-surface-container-lowest)',
+                                          padding: '3px 8px',
+                                          borderRadius: '4px',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          alignSelf: 'flex-start',
+                                        }}
+                                      >
+                                        <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>
+                                          {t.icon}
+                                        </span>
+                                        {t.icon === 'build' ? `工具: ${t.label}` : t.label}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })()}
 
-                          <div style={{ fontSize: '13px', lineHeight: '1.6', color: 'var(--color-on-surface)', whiteSpace: 'pre-wrap' }}>
-                            {visibleAssistant}
+                          <div style={{ fontSize: '13px', lineHeight: '1.6', color: 'var(--color-on-surface)' }}>
+                            {hasVisibleNarration ? (
+                              (() => {
+                                const assistantExp = assistantMarkdownExpandedForMessage(
+                                  msg.id,
+                                  visibleAssistant,
+                                  assistantExpandedByMsg,
+                                )
+                                const longBody = visibleAssistant.length > ASSISTANT_COLLAPSE_MIN_CHARS
+                                return longBody ? (
+                                  <>
+                                    <div
+                                      style={{
+                                        maxHeight: assistantExp ? undefined : 220,
+                                        overflow: assistantExp ? 'visible' : 'hidden',
+                                      }}
+                                    >
+                                      <ChatMarkdown content={visibleAssistant} />
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setAssistantExpandedByMsg((p) => ({
+                                          ...p,
+                                          [msg.id]: !assistantMarkdownExpandedForMessage(msg.id, visibleAssistant, p),
+                                        }))
+                                      }
+                                      style={{
+                                        marginTop: '8px',
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        padding: '4px 10px',
+                                        borderRadius: '999px',
+                                        border: '1px solid var(--color-outline-variant)',
+                                        background: 'var(--color-surface-container-lowest)',
+                                        color: 'var(--color-primary)',
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      {assistantExp ? '收起正文' : '展开全文'}
+                                    </button>
+                                  </>
+                                ) : (
+                                  <ChatMarkdown content={visibleAssistant} />
+                                )
+                              })()
+                            ) : msg.artifactStrip ? (
+                              <p
+                                style={{
+                                  margin: 0,
+                                  color: 'var(--color-on-surface-variant)',
+                                  fontSize: '13px',
+                                  lineHeight: 1.55,
+                                }}
+                              >
+                                {msg.artifactStrip.status === 'streaming'
+                                  ? '正在将正文写入中栏主画布…'
+                                  : msg.artifactStrip.summary
+                                    ? `详细内容已写入中栏主画布（${msg.artifactStrip.summary}）。可点击下方「查看」阅读全文。`
+                                    : '详细内容已写入中栏主画布。可点击下方「查看」阅读全文。'}
+                              </p>
+                            ) : (
+                              <ChatMarkdown content={visibleAssistant} />
+                            )}
                             {isStreaming && i === messages.length - 1 && !msg.content.includes('__ARTIFACT_PLACEHOLDER__') && (
                               <span style={{
                                 display: 'inline-block', width: '2px', height: '13px',
@@ -671,21 +1137,36 @@ export function RightPanel() {
             <div ref={messagesEndRef} />
           </div>
         </div>
-      )}
 
       {/* Input Area */}
       <div style={{ padding: '12px 16px 16px', borderTop: '1px solid var(--color-outline-variant)', background: 'var(--color-surface)', flexShrink: 0 }}>
         {sendHint && (
           <p style={{
             fontSize: '12px',
-            color: 'var(--color-error)',
+            color: sendHint.startsWith('Skill') ? 'var(--color-on-surface)' : 'var(--color-error)',
             margin: '0 0 8px',
             padding: '8px 10px',
             borderRadius: '8px',
-            background: 'color-mix(in srgb, var(--color-error) 12%, transparent)',
+            background: sendHint.startsWith('Skill')
+              ? 'color-mix(in srgb, var(--color-primary) 10%, transparent)'
+              : 'color-mix(in srgb, var(--color-error) 12%, transparent)',
           }}>
             {sendHint}
           </p>
+        )}
+        {forgeDraft && spaceId && (
+          <div style={{ padding: '0 16px', marginBottom: '8px' }}>
+            <ForgeSuggestionCard
+              draft={forgeDraft}
+              spaceId={spaceId}
+              onAccepted={() => {
+                setForgeDraft(null)
+                setSendHint('Skill 已保存到当前 Space')
+                window.setTimeout(() => setSendHint(null), 2800)
+              }}
+              onDismissed={() => setForgeDraft(null)}
+            />
+          </div>
         )}
         <div style={{
           background: 'var(--color-surface-container-lowest)',
@@ -699,6 +1180,17 @@ export function RightPanel() {
           onFocusCapture={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--color-primary)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 0 0 3px color-mix(in srgb, var(--color-primary) 15%, transparent)' }}
           onBlurCapture={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--color-outline-variant)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 1px 4px rgba(0,0,0,0.04)' }}
         >
+          <input
+            ref={uploadInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const files = e.target.files
+              void handleLibraryFilesChosen(files)
+              e.target.value = ''
+            }}
+          />
           <div
             title={currentDirTitle}
             style={{
@@ -723,12 +1215,24 @@ export function RightPanel() {
           >
             {currentDirBadge}
           </div>
+          {slashActive && (
+            <SlashCommandMenu
+              items={filteredSlashSkills}
+              emptyMode={skillsForSlash.length === 0 ? 'none' : 'filtered'}
+              selectedIndex={Math.min(slashSelectedIndex, Math.max(0, filteredSlashSkills.length - 1))}
+              onSelectIndex={setSlashSelectedIndex}
+              onPick={(skill) => {
+                void applySlashSelection(skill)
+              }}
+            />
+          )}
           <textarea
+            ref={textareaRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             placeholder="咨询 Kevin 或输入 / 唤起命令..."
             rows={2}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+            onKeyDown={handleTextareaKeyDown}
             style={{
               width: '100%', background: 'transparent', border: 'none', outline: 'none',
               resize: 'none', padding: '12px', fontSize: '13px',
@@ -738,16 +1242,45 @@ export function RightPanel() {
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 12px 10px' }}>
             <div style={{ display: 'flex', gap: '4px', color: 'var(--color-on-surface-variant)' }}>
-              {['attach_file', 'alternate_email'].map(icon => (
-                <button type="button" key={icon} style={{
+              <button
+                type="button"
+                title="上传文件到当前文档库目录"
+                onClick={() => uploadInputRef.current?.click()}
+                style={{
                   padding: '6px', background: 'transparent', border: 'none',
                   borderRadius: '8px', cursor: 'pointer', color: 'var(--color-on-surface-variant)',
                   display: 'flex', alignItems: 'center', transition: 'background 150ms',
                 }}
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>{icon}</span>
-                </button>
-              ))}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>attach_file</span>
+              </button>
+              <button
+                type="button"
+                title="@ 提及文档库路径"
+                onClick={() => setAtPickerOpen(true)}
+                style={{
+                  padding: '6px', background: 'transparent', border: 'none',
+                  borderRadius: '8px', cursor: 'pointer', color: 'var(--color-on-surface-variant)',
+                  display: 'flex', alignItems: 'center', transition: 'background 150ms',
+                }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>alternate_email</span>
+              </button>
+              <button
+                type="button"
+                title="Slash 命令"
+                onClick={() => {
+                  insertAtCursor('/')
+                }}
+                style={{
+                  padding: '6px', background: 'transparent', border: 'none',
+                  borderRadius: '8px', cursor: 'pointer', color: 'var(--color-on-surface-variant)',
+                  display: 'flex', alignItems: 'center', transition: 'background 150ms',
+                  fontSize: '14px', fontWeight: 700, fontFamily: 'var(--font-sans)',
+                }}
+              >
+                /
+              </button>
             </div>
             <button
               type="button"
@@ -776,6 +1309,18 @@ export function RightPanel() {
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
       `}</style>
+
+      {spaceId && (
+        <AtFilePicker
+          spaceId={spaceId}
+          libraryId={activeLibraryId}
+          open={atPickerOpen}
+          onClose={() => setAtPickerOpen(false)}
+          onPick={(path) => {
+            insertAtCursor(`${path} `)
+          }}
+        />
+      )}
     </div>
   )
 }

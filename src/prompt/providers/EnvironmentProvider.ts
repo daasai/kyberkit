@@ -32,6 +32,12 @@ export class EnvironmentProvider implements PromptSectionProvider {
       /* not a git repo or no git command */ 
     }
 
+    const lib = context.libraryUiContext?.trim();
+    if (lib) {
+      lines.push('');
+      lines.push(lib);
+    }
+
     return lines.join('\n');
   }
 }

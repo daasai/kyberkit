@@ -4,7 +4,7 @@
  */
 
 import { Database } from 'bun:sqlite'
-import { mkdirSync } from 'fs'
+import { existsSync, mkdirSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import {
@@ -20,12 +20,25 @@ export interface SessionRow {
   title: string
   created_at: string
   updated_at: string
+  /** 1 = pinned to top of default list */
+  pinned: number
+  /** 1 = hidden from default list (archived view) */
+  archived: number
 }
 
 export interface ArtifactRow {
   session_id: string
   content: string
   updated_at: string
+}
+
+/** One row per artifact file saved during a session (append-only; canvas may show latest only). */
+export interface SessionSavedArtifactRow {
+  id: string
+  session_id: string
+  library_relative_path: string | null
+  summary: string
+  created_at: string
 }
 
 export interface ChatMessageRow {
@@ -81,6 +94,29 @@ export function dbCountAllSessions(): number {
   return n
 }
 
+/**
+ * Close the SQLite handle for this library (if open) and delete `sessions.db`
+ * under {@link libraryTechRoot}. Caller should delete sessions/tasks first if needed.
+ */
+export function evictLibraryDatabase(libraryId: string): void {
+  const key = libraryId.trim()
+  const existing = dbByLibraryId.get(key)
+  if (existing) {
+    try {
+      existing.close(true)
+    } catch {
+      /* ignore */
+    }
+    dbByLibraryId.delete(key)
+  }
+  try {
+    const dbPath = join(libraryTechRoot(key), 'sessions.db')
+    if (existsSync(dbPath)) unlinkSync(dbPath)
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getDb(libraryId: string): Database {
   const key = libraryId.trim()
   const existing = dbByLibraryId.get(key)
@@ -96,9 +132,12 @@ export function getDb(libraryId: string): Database {
       library_id  TEXT NOT NULL,
       title       TEXT NOT NULL DEFAULT 'New Session',
       created_at  TEXT NOT NULL,
-      updated_at  TEXT NOT NULL
+      updated_at  TEXT NOT NULL,
+      pinned      INTEGER NOT NULL DEFAULT 0,
+      archived    INTEGER NOT NULL DEFAULT 0
     )
   `)
+  migrateSessionsPinArchive(db)
   db.run(`
     CREATE TABLE IF NOT EXISTS artifacts (
       session_id  TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
@@ -106,6 +145,18 @@ export function getDb(libraryId: string): Database {
       updated_at  TEXT NOT NULL
     )
   `)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS session_saved_artifacts (
+      id                      TEXT PRIMARY KEY,
+      session_id              TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      library_relative_path   TEXT,
+      summary                 TEXT NOT NULL DEFAULT '',
+      created_at              TEXT NOT NULL
+    )
+  `)
+  db.run(
+    `CREATE INDEX IF NOT EXISTS idx_session_saved_artifacts_session ON session_saved_artifacts(session_id, created_at DESC)`,
+  )
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
       id          TEXT PRIMARY KEY,
@@ -135,6 +186,26 @@ export function getDb(libraryId: string): Database {
   console.log(`[DB] Connected: ${dbPath}`)
   dbByLibraryId.set(key, db)
   return db
+}
+
+/** Add pinned/archived columns to pre-v1.5-gap DBs (idempotent). */
+function migrateSessionsPinArchive(db: Database): void {
+  const cols = db.query('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+  const names = new Set(cols.map((c) => c.name))
+  if (!names.has('pinned')) {
+    try {
+      db.run('ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!names.has('archived')) {
+    try {
+      db.run('ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0')
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function dbForSpace(spaceId: string): Database | null {
@@ -213,10 +284,57 @@ export function dbDeleteTask(id: string): void {
   found.db.run('DELETE FROM tasks WHERE id = ?', [id])
 }
 
-export function dbListSessions(libraryId: string, spaceId: string): SessionRow[] {
+/** All sessions for a space (default + archived) — used before tearing down a library DB. */
+export function dbListAllSessionsInSpace(libraryId: string, spaceId: string): SessionRow[] {
   return getDb(libraryId)
     .query('SELECT * FROM sessions WHERE space_id = ? ORDER BY updated_at DESC')
     .all(spaceId) as SessionRow[]
+}
+
+export function dbListSessions(
+  libraryId: string,
+  spaceId: string,
+  opts?: { archived?: boolean },
+): SessionRow[] {
+  const archived = opts?.archived === true ? 1 : 0
+  if (archived) {
+    return getDb(libraryId)
+      .query(
+        'SELECT * FROM sessions WHERE space_id = ? AND archived = 1 ORDER BY updated_at DESC',
+      )
+      .all(spaceId) as SessionRow[]
+  }
+  return getDb(libraryId)
+    .query(
+      'SELECT * FROM sessions WHERE space_id = ? AND archived = 0 ORDER BY pinned DESC, updated_at DESC',
+    )
+    .all(spaceId) as SessionRow[]
+}
+
+export function dbSetSessionPinned(
+  libraryId: string,
+  spaceId: string,
+  id: string,
+  pinned: boolean,
+): void {
+  const now = new Date().toISOString()
+  getDb(libraryId).run(
+    'UPDATE sessions SET pinned = ?, updated_at = ? WHERE id = ? AND space_id = ?',
+    [pinned ? 1 : 0, now, id, spaceId],
+  )
+}
+
+export function dbSetSessionArchived(
+  libraryId: string,
+  spaceId: string,
+  id: string,
+  archived: boolean,
+): void {
+  const now = new Date().toISOString()
+  getDb(libraryId).run(
+    'UPDATE sessions SET archived = ?, pinned = CASE WHEN ? = 1 THEN 0 ELSE pinned END, updated_at = ? WHERE id = ? AND space_id = ?',
+    [archived ? 1 : 0, archived ? 1 : 0, now, id, spaceId],
+  )
 }
 
 export function dbGetSession(libraryId: string, spaceId: string, id: string): SessionRow | null {
@@ -233,10 +351,19 @@ export function dbCreateSession(
 ): SessionRow {
   const now = new Date().toISOString()
   getDb(libraryId).run(
-    'INSERT INTO sessions (id, space_id, library_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO sessions (id, space_id, library_id, title, created_at, updated_at, pinned, archived) VALUES (?, ?, ?, ?, ?, ?, 0, 0)',
     [id, spaceId, libraryId, title, now, now],
   )
-  return { id, space_id: spaceId, library_id: libraryId, title, created_at: now, updated_at: now }
+  return {
+    id,
+    space_id: spaceId,
+    library_id: libraryId,
+    title,
+    created_at: now,
+    updated_at: now,
+    pinned: 0,
+    archived: 0,
+  }
 }
 
 export function dbUpdateSessionTitle(libraryId: string, spaceId: string, id: string, title: string): void {
@@ -266,6 +393,32 @@ export function dbUpsertArtifact(libraryId: string, sessionId: string, content: 
     [sessionId, content, now],
   )
   getDb(libraryId).run('UPDATE sessions SET updated_at = ? WHERE id = ?', [now, sessionId])
+}
+
+export function dbInsertSessionSavedArtifact(
+  libraryId: string,
+  row: {
+    id: string
+    session_id: string
+    library_relative_path: string
+    summary: string
+    created_at: string
+  },
+): void {
+  getDb(libraryId).run(
+    `INSERT OR IGNORE INTO session_saved_artifacts (id, session_id, library_relative_path, summary, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [row.id, row.session_id, row.library_relative_path, row.summary, row.created_at],
+  )
+}
+
+export function dbListSessionSavedArtifacts(libraryId: string, sessionId: string): SessionSavedArtifactRow[] {
+  return getDb(libraryId)
+    .query(
+      `SELECT id, session_id, library_relative_path, summary, created_at
+       FROM session_saved_artifacts WHERE session_id = ? ORDER BY created_at DESC, id DESC`,
+    )
+    .all(sessionId) as SessionSavedArtifactRow[]
 }
 
 /** Ordered chat history for UI + agent replay (capped). */

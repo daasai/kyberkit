@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSession } from '../../contexts/SessionContext'
 import { useArtifact } from '../../contexts/ArtifactContext'
 import { SIDECAR_URL, qsSpace } from '../../config/sidecarUrl'
-import { SpaceManagerPanel } from './SpaceManagerPanel'
 import {
   KEVIN_LIBRARY_SELECTION_EVENT,
+  KEVIN_OPEN_LIBRARY_FILE_EVENT,
+  collectAncestorDirRefsForLibraryFile,
   emitLibrarySelection,
   getSelectedLibraryDir,
   setSelectedLibraryDir,
   toParentLibraryDir,
   type LibrarySelectionEventDetail,
+  type OpenLibraryFileDetail,
 } from '../../lib/librarySelection'
 
 type Connector = {
@@ -25,6 +27,12 @@ type LibraryNode = {
   kind: 'file' | 'dir'
   children?: LibraryNode[]
 }
+
+/** PDF / Office: open with OS default app; do not pipe binary through Milkdown. */
+const OPEN_IN_SYSTEM_VIEWER_RE = /\.(pdf|docx?|pptx?|ppsx?|xlsx?|xlsm?|xls)$/i
+
+/** Pinned first + `updatedAt` desc comes from Sidecar; show this many rows until user expands「更多」. */
+const SESSION_HISTORY_PREVIEW = 3
 
 export function sortConnectors(connectors: Connector[]): Connector[] {
   return [...connectors].sort((a, b) => Number(b.status === 'error') - Number(a.status === 'error'))
@@ -67,15 +75,7 @@ function findFirstDirPath(nodes: LibraryNode[]): string | null {
   return null
 }
 
-export function LeftSidebar({
-  onOpenSkillStore,
-  onOpenAutomation,
-  onOpenSearch,
-}: {
-  onOpenSkillStore?: () => void
-  onOpenAutomation?: () => void
-  onOpenSearch?: () => void
-} = {}) {
+export function LeftSidebar() {
   const {
     sessions,
     activeSessionId,
@@ -83,17 +83,10 @@ export function LeftSidebar({
     createSession,
     deleteSession,
     spaceId,
-    setSpaceId,
-    spaces,
-    refreshSpaces,
-    createSpaceLibrary,
-    openSpaceInNewWindow,
+    pinSession,
   } = useSession()
-  const { clearArtifact, loadArtifact } = useArtifact()
+  const { clearArtifact, loadArtifact, openLibraryDocument } = useArtifact()
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [spaceMenuOpen, setSpaceMenuOpen] = useState(false)
-  const [spaceManagerOpen, setSpaceManagerOpen] = useState(false)
-  const spaceMenuRef = useRef<HTMLDivElement>(null)
   const [pendingSignoffSessionIds, setPendingSignoffSessionIds] = useState<Set<string>>(new Set())
   const [rawConnectors, setRawConnectors] = useState<Connector[]>([])
   const [connectorsUnavailable, setConnectorsUnavailable] = useState(false)
@@ -105,7 +98,19 @@ export function LeftSidebar({
   const [selectedLibraryPath, setSelectedLibraryPath] = useState<string | null>(null)
   /** Current “working directory” under the Library mount (dir only). */
   const [selectedLibraryDirPath, setSelectedLibraryDirPath] = useState<string | null>(null)
+  const [sessionHistoryExpanded, setSessionHistoryExpanded] = useState(false)
   const connectors = sortConnectors(rawConnectors)
+  /** 产品要求：连接器区仅展示「贝易转 DW」。 */
+  const connectorsForUi = useMemo(
+    () => connectors.filter((c) => c.name === '贝易转 DW'),
+    [connectors],
+  )
+  const visibleSessions = sessionHistoryExpanded ? sessions : sessions.slice(0, SESSION_HISTORY_PREVIEW)
+
+  useEffect(() => {
+    if (!spaceId) return
+    setSessionHistoryExpanded(false)
+  }, [spaceId])
 
   // Dynamic connector fetch with strict unavailable state (no demo fallback).
   useEffect(() => {
@@ -216,32 +221,29 @@ export function LeftSidebar({
     }
   }, [spaceId])
 
-  /** Switch Space inside this window (PRD §7.E vault switcher). */
-  const selectSpaceInCurrentWindow = (targetSpaceId: string) => {
-    if (targetSpaceId === spaceId) {
-      setSpaceMenuOpen(false)
-      return
-    }
-    setSpaceId(targetSpaceId)
-    setSpaceMenuOpen(false)
-  }
-
+  /** Global search: reveal file in library tree + sync upload / chat dir context. */
   useEffect(() => {
-    if (!spaceMenuOpen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSpaceMenuOpen(false)
+    const onOpenFile = (e: Event) => {
+      const d = (e as CustomEvent<OpenLibraryFileDetail>).detail
+      if (!d?.path || !d.spaceId || d.spaceId !== spaceId) return
+      const parent = toParentLibraryDir(d.path)
+      setSelectedLibraryPath(d.path)
+      setSelectedLibraryDirPath(parent)
+      setSelectedLibraryDir(spaceId, parent)
+      emitLibrarySelection({ spaceId, selectedPath: d.path, selectedDirPath: parent })
+      setExpandedLibraryPaths((prev) => {
+        const next = new Set(prev)
+        for (const p of collectAncestorDirRefsForLibraryFile(d.path)) {
+          next.add(p)
+        }
+        return next
+      })
     }
-    const onPointerDown = (e: MouseEvent) => {
-      const el = spaceMenuRef.current
-      if (el && !el.contains(e.target as Node)) setSpaceMenuOpen(false)
-    }
-    document.addEventListener('keydown', onKey)
-    document.addEventListener('mousedown', onPointerDown)
+    window.addEventListener(KEVIN_OPEN_LIBRARY_FILE_EVENT, onOpenFile as EventListener)
     return () => {
-      document.removeEventListener('keydown', onKey)
-      document.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener(KEVIN_OPEN_LIBRARY_FILE_EVENT, onOpenFile as EventListener)
     }
-  }, [spaceMenuOpen])
+  }, [spaceId])
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
@@ -256,9 +258,6 @@ export function LeftSidebar({
     await createSession()
   }
 
-  const currentSpaceMeta = spaces.find((s) => s.id === spaceId)
-  const spaceAnchorLabel = currentSpaceMeta?.label ?? spaceId ?? '未选择 Space'
-
   return (
     <div style={{
       height: '100%',
@@ -267,16 +266,13 @@ export function LeftSidebar({
       display: 'flex',
       flexDirection: 'column',
     }}>
-      {/* Scrollable content */}
-      <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+      {/* Scrollable content（连接器在底部常驻区，不随滚动离开视口） */}
+      <div className="custom-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px' }}>
 
         {/* Top Nav */}
         <nav style={{ marginBottom: '20px' }}>
           {[
             { icon: 'add', label: '新建会话', action: handleNew },
-            { icon: 'search',    label: '搜索',       action: () => onOpenSearch?.() },
-            { icon: 'extension', label: 'Skill Store', action: () => onOpenSkillStore?.() },
-            { icon: 'smart_toy', label: '自动化',     action: () => onOpenAutomation?.() },
           ].map(({ icon, label, action }) => (
             <button key={label} type="button" onClick={action} style={{
               display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
@@ -292,6 +288,173 @@ export function LeftSidebar({
             </button>
           ))}
         </nav>
+
+        {/* 历史会话 — 紧挨「新建会话」；默认最多 3 条（置顶优先 + 最新），其余「更多」展开 */}
+        <div id="sidebar-session-history" style={{ marginBottom: '20px' }}>
+          <div style={{ padding: '0 12px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-on-surface-variant)' }}>
+              历史会话
+            </span>
+            <button type="button" onClick={handleNew} style={{
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: 'var(--color-on-surface-variant)', display: 'flex', alignItems: 'center',
+              borderRadius: '4px', padding: '2px',
+            }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>add</span>
+            </button>
+          </div>
+
+          {sessions.length === 0 ? (
+            <div style={{ padding: '12px', textAlign: 'center', color: 'var(--color-on-surface-variant)', fontSize: '12px' }}>
+              暂无历史会话
+            </div>
+          ) : (
+            <>
+              {visibleSessions.map(({ id, title, updatedAt, pinned }) => {
+                const isActive = id === activeSessionId
+                const hasPendingSignoff = pendingSignoffSessionIds.has(id)
+                return (
+                  <div
+                    key={id}
+                    className={`session-row-wrap${isActive ? ' session-row-active' : ''}`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'stretch',
+                      borderRadius: '8px',
+                      position: 'relative',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setActiveSessionId(id)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '8px 12px', borderRadius: '8px',
+                        fontSize: '13px', fontWeight: 500,
+                        color: isActive ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
+                        background: isActive ? 'var(--color-surface-container)' : 'transparent',
+                        position: 'relative', cursor: 'pointer',
+                        transition: 'background 150ms, color 150ms',
+                        border: 'none',
+                        flex: 1,
+                        minWidth: 0,
+                        textAlign: 'left',
+                      }}
+                    >
+                      {isActive && (
+                        <div style={{
+                          position: 'absolute', left: 0, top: '8px', bottom: '8px',
+                          width: '3px', background: 'var(--color-primary)', borderRadius: '0 3px 3px 0',
+                        }} />
+                      )}
+                      <span
+                        className="material-symbols-outlined"
+                        style={{
+                          fontSize: '15px',
+                          color: pinned ? 'var(--color-primary)' : (isActive ? 'var(--color-primary)' : 'inherit'),
+                          flexShrink: 0,
+                        }}
+                        title={pinned ? '已置顶' : undefined}
+                      >
+                        {pinned ? 'push_pin' : 'description'}
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' }}>
+                          {title}
+                          {hasPendingSignoff && (
+                            <span title="该会话有待签批任务" style={{ color: 'var(--color-error)', marginLeft: '6px', fontSize: '10px' }}>●</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: '1px' }}>{relativeTime(updatedAt)}</div>
+                      </div>
+                    </button>
+                    <div
+                      className="session-actions"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '2px',
+                        paddingRight: '6px',
+                        flexShrink: 0,
+                        opacity: isActive ? 1 : 0,
+                        transition: 'opacity 150ms',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        title={pinned ? '取消置顶' : '置顶'}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void pinSession(id, !pinned)
+                        }}
+                        className="session-action-icon-btn"
+                        style={{
+                          background: 'transparent', border: 'none', cursor: 'pointer',
+                          padding: '4px', borderRadius: '4px',
+                          color: isActive ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
+                        }}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>push_pin</span>
+                      </button>
+                      <button
+                        onClick={e => handleDelete(e, id)}
+                        disabled={deletingId === id}
+                        type="button"
+                        title="删除"
+                        style={{
+                          background: 'transparent', border: 'none',
+                          cursor: deletingId === id ? 'default' : 'pointer', padding: '4px', borderRadius: '4px',
+                          color: isActive ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
+                          opacity: deletingId === id ? 0.45 : 1,
+                        }}
+                        className="session-delete-btn session-action-icon-btn"
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>close</span>
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+              {sessions.length > SESSION_HISTORY_PREVIEW && !sessionHistoryExpanded && (
+                <button
+                  type="button"
+                  onClick={() => setSessionHistoryExpanded(true)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '12px',
+                    color: 'var(--color-primary)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  更多（{sessions.length - SESSION_HISTORY_PREVIEW}）
+                </button>
+              )}
+              {sessions.length > SESSION_HISTORY_PREVIEW && sessionHistoryExpanded && (
+                <button
+                  type="button"
+                  onClick={() => setSessionHistoryExpanded(false)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '12px',
+                    color: 'var(--color-on-surface-variant)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  收起
+                </button>
+              )}
+            </>
+          )}
+        </div>
 
         {/* Document Library */}
         <div style={{ marginBottom: '20px' }}>
@@ -389,8 +552,39 @@ export function LeftSidebar({
                         }
                         const parentDir = toParentLibraryDir(entry.path)
                         applySelection(entry.path, parentDir)
-                        // Try previewing selected file in center panel; keep existing artifact if unsupported.
                         if (!spaceId) return
+                        const sid = activeSessionId ?? `preview-${spaceId}`
+
+                        if (OPEN_IN_SYSTEM_VIEWER_RE.test(entry.name)) {
+                          void fetch(`${SIDECAR_URL}/library/open-external${qsSpace(spaceId)}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: entry.path }),
+                          })
+                            .then(async (r) => {
+                              const data = (await r.json().catch(() => ({}))) as { error?: string }
+                              if (!r.ok) {
+                                const err = typeof data.error === 'string' ? data.error : `HTTP ${r.status}`
+                                loadArtifact(
+                                  sid,
+                                  `# 未能在外部打开文件\n\n- 文件：\`${entry.name}\`\n- 错误：${err}\n`,
+                                )
+                                return
+                              }
+                              loadArtifact(
+                                sid,
+                                `# 已在系统默认程序中打开\n\n- 文件：\`${entry.name}\`\n\n该类型不在中栏加载文本流，可避免卡顿与乱码。若未自动弹出，请在访达或资源管理器中手动打开该文件。\n`,
+                              )
+                            })
+                            .catch(() => {
+                              loadArtifact(
+                                sid,
+                                `# 未能在外部打开文件\n\n- 文件：\`${entry.name}\`\n- 原因：网络或 Sidecar 异常。\n`,
+                              )
+                            })
+                          return
+                        }
+
                         const q = qsSpace(spaceId)
                         const sep = q ? '&' : '?'
                         fetch(`${SIDECAR_URL}/library/file${q}${sep}path=${encodeURIComponent(entry.path)}`)
@@ -412,16 +606,16 @@ export function LeftSidebar({
                                     ? '该文件为二进制内容，不支持文本预览。'
                                     : '该文件暂不支持预览。'
                               const fallback = `# 文件预览不可用\n\n- 文件：\`${entry.name}\`\n- 状态码：\`${status}\`\n- 原因：${hint}\n`
-                              loadArtifact(activeSessionId ?? `preview-${spaceId}`, fallback)
+                              loadArtifact(sid, fallback)
                               return
                             }
                             if (typeof data.content === 'string') {
-                              loadArtifact(activeSessionId ?? `preview-${spaceId}`, data.content)
+                              openLibraryDocument(sid, data.content, entry.path)
                             }
                           })
                           .catch(() => {
                             const fallback = `# 文件预览不可用\n\n- 文件：\`${entry.name}\`\n- 原因：请求失败或内容不可读。`
-                            loadArtifact(activeSessionId ?? `preview-${spaceId}`, fallback)
+                            loadArtifact(sid, fallback)
                           })
                       }}
                       style={{
@@ -466,292 +660,69 @@ export function LeftSidebar({
             })
           )}
         </div>
-
-        {/* Connectors */}
-        <div style={{ marginBottom: '20px' }}>
-          <div style={{ padding: '0 12px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-on-surface-variant)' }}>
-              连接器
-            </span>
-            <span />
-          </div>
-          {connectorsUnavailable || connectors.length === 0 ? (
-            <div style={{ padding: '6px 12px', fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
-              暂无可用连接器
-            </div>
-          ) : (
-            connectors.map((item) => (
-              <div
-                key={item.name}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  padding: '6px 12px', borderRadius: '8px',
-                  fontSize: '13px', fontWeight: 500, color: 'var(--color-on-surface)',
-                }}
-              >
-                <span
-                  style={{
-                    width: '8px',
-                    height: '8px',
-                    borderRadius: '50%',
-                    background: item.status === 'healthy' ? '#16a34a' : '#dc2626',
-                    flexShrink: 0,
-                  }}
-                />
-                <span style={{ fontSize: '13px', flex: 1 }}>{item.name}</span>
-                <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>{item.lastSuccess}</span>
-              </div>
-            ))
-          )}
-        </div>
-
-        {/* Recent Artifacts — dynamic from Sidecar */}
-        <div id="sidebar-session-history">
-          <div style={{ padding: '0 12px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-on-surface-variant)' }}>
-              历史会话
-            </span>
-            <button type="button" onClick={handleNew} style={{
-              background: 'transparent', border: 'none', cursor: 'pointer',
-              color: 'var(--color-on-surface-variant)', display: 'flex', alignItems: 'center',
-              borderRadius: '4px', padding: '2px',
-            }}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>add</span>
-            </button>
-          </div>
-
-          {sessions.length === 0 ? (
-            <div style={{ padding: '12px', textAlign: 'center', color: 'var(--color-on-surface-variant)', fontSize: '12px' }}>
-              暂无历史会话
-            </div>
-          ) : (
-            sessions.map(({ id, title, updatedAt }) => {
-              const isActive = id === activeSessionId
-              const hasPendingSignoff = pendingSignoffSessionIds.has(id)
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setActiveSessionId(id)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    padding: '8px 12px', borderRadius: '8px',
-                    fontSize: '13px', fontWeight: 500,
-                    color: isActive ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
-                    background: isActive ? 'var(--color-surface-container)' : 'transparent',
-                    position: 'relative', cursor: 'pointer',
-                    transition: 'background 150ms, color 150ms',
-                    border: 'none',
-                    width: '100%',
-                    textAlign: 'left',
-                  }}
-                >
-                  {isActive && (
-                    <div style={{
-                      position: 'absolute', left: 0, top: '8px', bottom: '8px',
-                      width: '3px', background: 'var(--color-primary)', borderRadius: '0 3px 3px 0',
-                    }} />
-                  )}
-                  <span className="material-symbols-outlined" style={{ fontSize: '15px', color: isActive ? 'var(--color-primary)' : 'inherit', flexShrink: 0 }}>description</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' }}>
-                      {title}
-                      {hasPendingSignoff && (
-                        <span title="该会话有待签批任务" style={{ color: 'var(--color-error)', marginLeft: '6px', fontSize: '10px' }}>●</span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: '1px' }}>{relativeTime(updatedAt)}</div>
-                  </div>
-                  {/* Delete button (shown on hover) */}
-                  <button
-                    onClick={e => handleDelete(e, id)}
-                    disabled={deletingId === id}
-                    type="button"
-                    style={{
-                      flexShrink: 0, opacity: 0, background: 'transparent', border: 'none',
-                      cursor: 'pointer', padding: '2px', borderRadius: '4px',
-                      color: 'var(--color-on-surface-variant)',
-                      transition: 'opacity 150ms, background 150ms',
-                    }}
-                    className="session-delete-btn"
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>close</span>
-                  </button>
-                </button>
-              )
-            })
-          )}
-        </div>
       </div>
 
-      {/* Space switcher (replaces Upgrade Plan) */}
-      <div
-        ref={spaceMenuRef}
+      {/* 连接器：左栏最底部常驻，不随上方内容滚动 */}
+      <section
+        aria-label="连接器"
         style={{
-          padding: '16px',
+          flexShrink: 0,
           borderTop: '1px solid var(--color-outline-variant)',
-          position: 'relative',
+          padding: '10px 8px 14px',
+          backgroundColor: 'var(--color-surface-container-lowest)',
         }}
       >
-        <button
-          type="button"
-          data-testid="space-switcher"
-          aria-expanded={spaceMenuOpen}
-          aria-haspopup="menu"
-          onClick={() => {
-            setSpaceMenuOpen((o) => {
-              const next = !o
-              if (next) void refreshSpaces()
-              return next
-            })
-          }}
-          style={{
-            width: '100%',
-            padding: '8px 10px',
-            fontSize: '12px',
-            fontWeight: 600,
-            background: 'var(--color-surface-container-lowest)',
-            border: '1px solid var(--color-outline-variant)',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            color: 'var(--color-on-surface)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            transition: 'background 150ms',
-          }}
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: '18px', flexShrink: 0 }}>
-            layers
+        <div style={{ padding: '0 12px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-on-surface-variant)' }}>
+            连接器
           </span>
-          <span style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {spaceAnchorLabel}
-          </span>
-          <span className="material-symbols-outlined" style={{ fontSize: '18px', flexShrink: 0, opacity: 0.7 }}>
-            {spaceMenuOpen ? 'expand_less' : 'expand_more'}
-          </span>
-        </button>
-
-        {spaceMenuOpen && (
-          <div
-            role="menu"
-            data-testid="space-switcher-menu"
-            style={{
-              position: 'absolute',
-              left: 16,
-              right: 16,
-              bottom: '100%',
-              marginBottom: 8,
-              maxHeight: 'min(320px, 45vh)',
-              overflowY: 'auto',
-              background: 'var(--color-surface)',
-              border: '1px solid var(--color-outline-variant)',
-              borderRadius: '10px',
-              boxShadow: '0 4px 18px rgba(0,0,0,0.12)',
-              zIndex: 20,
-              padding: '6px 0',
-            }}
-          >
-            {spaces.length === 0 ? (
-              <div style={{ padding: '12px 14px', fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
-                加载 Space 列表…
-              </div>
-            ) : (
-              spaces.map(({ id, label }) => {
-                const isCurrent = id === spaceId
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    role="menuitem"
-                    onClick={() => selectSpaceInCurrentWindow(id)}
-                    style={{
-                      width: '100%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '8px 12px',
-                      border: 'none',
-                      background: isCurrent ? 'var(--color-surface-container)' : 'transparent',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      fontSize: '13px',
-                      color: 'var(--color-on-surface)',
-                    }}
-                  >
-                    <span style={{ width: '20px', flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
-                      {isCurrent ? (
-                        <span className="material-symbols-outlined" style={{ fontSize: '18px', color: 'var(--color-primary)' }}>
-                          check
-                        </span>
-                      ) : null}
-                    </span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {label}
-                      </span>
-                      <span style={{ display: 'block', fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: 2 }}>
-                        {id}
-                      </span>
-                    </span>
-                  </button>
-                )
-              })
-            )}
-            <div style={{ borderTop: '1px solid var(--color-outline-variant)', marginTop: 4, paddingTop: 4 }}>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setSpaceMenuOpen(false)
-                  setSpaceManagerOpen(true)
-                }}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '8px 12px',
-                  border: 'none',
-                  background: 'transparent',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  color: 'var(--color-primary)',
-                }}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>tune</span>
-                管理 Space…
-              </button>
-            </div>
+          <span />
+        </div>
+        {connectorsUnavailable || connectorsForUi.length === 0 ? (
+          <div style={{ padding: '6px 12px', fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
+            暂无可用连接器
           </div>
+        ) : (
+          connectorsForUi.map((item) => (
+            <div
+              key={item.name}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '6px 12px',
+                borderRadius: '8px',
+                fontSize: '13px',
+                fontWeight: 500,
+                color: 'var(--color-on-surface)',
+              }}
+            >
+              <span
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: item.status === 'healthy' ? '#16a34a' : '#dc2626',
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ fontSize: '13px', flex: 1 }}>{item.name}</span>
+              <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>{item.lastSuccess}</span>
+            </div>
+          ))
         )}
-      </div>
-
-      <SpaceManagerPanel
-        open={spaceManagerOpen}
-        spaces={spaces}
-        currentSpaceId={spaceId}
-        onClose={() => setSpaceManagerOpen(false)}
-        onSwitchSpace={(id) => {
-          selectSpaceInCurrentWindow(id)
-          setSpaceManagerOpen(false)
-        }}
-        onCreateSpace={async (mountPath, displayName) => {
-          await createSpaceLibrary(mountPath, displayName)
-          await refreshSpaces()
-        }}
-        onOpenInNewWindow={async (id) => {
-          await openSpaceInNewWindow(id)
-        }}
-      />
+      </section>
 
       <style>{`
-        div:hover > .session-delete-btn,
-        [role="button"]:hover > .session-delete-btn {
+        .session-row-wrap:hover .session-actions,
+        .session-row-wrap:focus-within .session-actions {
           opacity: 1 !important;
+        }
+        .session-action-icon-btn:hover:not(:disabled) {
+          background: color-mix(in srgb, var(--color-on-surface) 10%, transparent);
+        }
+        .session-row-active .session-action-icon-btn:hover:not(:disabled) {
+          background: color-mix(in srgb, var(--color-primary) 14%, transparent);
         }
       `}</style>
     </div>

@@ -5,6 +5,7 @@ import { ToolRuleChecker } from '../tools/ToolRuleChecker.js';
 import type { ModelProvider } from '../types/model.js';
 import { PermissionSandbox } from '../permission/PermissionSandbox.js';
 import type { KyberConfig, MCPServerConfig } from '../types/config.js';
+import type { MCPToolRegistry } from '../types/tool.js';
 import { loadConfig } from '../config/ConfigLoader.js';
 import { DefaultShellExecutor } from '../tools/shell/ShellExecutor.js';
 import { DefaultMCPToolRegistry } from '../tools/mcp/MCPToolRegistry.js';
@@ -55,6 +56,21 @@ import { TriggeredScheduler } from '../scheduler/TriggeredScheduler.js';
 import { ContractCommand } from '../commands/builtin/ContractCommand.js';
 import type { AgentProductDef } from '../types/agent-product.js';
 import { fileURLToPath, pathToFileURL } from 'url';
+
+/** Kevin UI: map colloquial 「文档库」 to the mounted Library root (shown in Environment cwd). */
+function kevinLibraryLexiconSection(libraryMountAbs: string): string {
+  const safePath = libraryMountAbs.replace(/\\/g, '/');
+  return [
+    '## Kevin UI — 「文档库」即本 Library',
+    '',
+    '在本 Kevin 会话中：',
+    '- 用户在界面里说的「**文档库**」、英文 **Library**、左侧文件树，均指当前 Space 已挂载的**本地文件夹**。下面「工作区 cwd」就是它的根目录。',
+    '- 当用户要求「把内容**写入文档库**」「保存到资料库」「落库」等，应使用 `read_file` / `write_file` 等工具，在该根目录下使用**相对路径**（如 `subdir/report.md` 或 `./report.md`）；必要时先用 `list_directory` 或 `list_allowed_directories`。',
+    '- **不要**把「文档库」联想为外置网盘、浏览器下载目录、或任何不在允许路径内的磁盘位置。',
+    '',
+    `**Library 根目录（绝对路径）**: \`${safePath}\``,
+  ].join('\n');
+}
 
 export class KyberRuntime {
   private bus!: TypedEventBus<KyberEvents>;
@@ -420,6 +436,7 @@ export class KyberRuntime {
       return typeof mem?.getLongTermMemory === 'function' ? mem.getLongTermMemory() : undefined;
     });
     let deps = this.createAgentLoopDeps(agent, reliability, pipeline);
+    let sessionMcpCleanup: (() => Promise<void>) | undefined
     if (opts.agentExecution) {
       const ctx = opts.agentExecution;
       const absMount = resolve(ctx.libraryMountPath);
@@ -436,23 +453,41 @@ export class KyberRuntime {
       const builtinsReg = new BuiltinToolRegistry(
         createBuiltinTools(facade.shell, sessionSandbox, absMount),
       );
+      /** Kevin Rev3: per-session MCP stdio args get Library mount appended when `mcpRoots` is set. */
+      let mcpForSession: MCPToolRegistry = facade.mcp
+      if (ctx.mcpRoots?.length) {
+        const sessionMcp = new DefaultMCPToolRegistry()
+        for (const serverConfig of this.config.mcp?.servers ?? []) {
+          try {
+            await sessionMcp.connect(serverConfig as MCPServerConfig, ctx.mcpRoots)
+            this.bus.emit('mcp.connected', { serverName: `${serverConfig.name}@session` })
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err)
+            console.warn(`[KyberRuntime] Session MCP connect failed (${serverConfig.name}):`, message)
+          }
+        }
+        mcpForSession = sessionMcp as unknown as MCPToolRegistry
+        sessionMcpCleanup = () => sessionMcp.disconnectAll()
+      }
       const sessionTools = new DefaultToolIntegrationFacade(
         facade.shell,
-        facade.mcp,
+        mcpForSession,
         facade.skills,
         builtinsReg,
       );
-      // MCP stays process-global; per RS-10, do not claim MCP fs root tracks Library until a request-level MCP spike.
       deps = { ...deps, tools: sessionTools, sandbox: sessionSandbox, executionCwd: absMount };
 
       // Kevin v1.5 §12.5 — L1 progressive disclosure: append the Skill directory
       // to this session's platformDirective, so the model sees (name, description)
       // for every Skill visible to the current Space without paying for full bodies.
       const dir = ctx.skillDirectory?.trim();
+      let pd = (deps.platformDirective ?? '').trim();
       if (dir) {
-        const base = (deps.platformDirective ?? '').trim();
-        deps = { ...deps, platformDirective: base ? `${base}\n\n${dir}` : dir };
+        pd = pd ? `${pd}\n\n${dir}` : dir;
       }
+      const libLex = kevinLibraryLexiconSection(absMount);
+      pd = pd ? `${pd}\n\n${libLex}` : libLex;
+      deps = { ...deps, platformDirective: pd };
     }
 
     const trajEnabled = this.config.telemetry.trajectory.enabled !== false;
@@ -482,6 +517,7 @@ export class KyberRuntime {
     return new AgentSession(sessionId, agent, deps, reliability, cleanup, trajectory, {
       skillSuggestion: opts.skillSuggestion ?? skillRunner,
       learningLoop,
+      sessionMcpCleanup,
     });
   }
 

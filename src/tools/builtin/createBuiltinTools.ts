@@ -9,6 +9,10 @@ import { randomUUID } from 'crypto';
 import { buildTool } from '../buildTool.js';
 import { matchSimpleGlob } from './globMatch.js';
 import { readFileSafe, resolveSandboxedPath, writeFileSafe } from './pathSafe.js';
+import {
+  extractTextFromBinaryFile,
+  isBinaryExtractablePath,
+} from '../../util/binaryFileExtract.js';
 
 function perm(
   sandbox: PermissionSandbox,
@@ -92,7 +96,7 @@ export function createBuiltinTools(
   const readFile = buildTool({
     name: 'read_file',
     descriptionText:
-      'Read a text file from the workspace. Use offset/limit for large files. Returns UTF-8 text (truncated if too long).',
+      'Read a text file from the workspace (UTF-8). PDF, XLS/XLSX, and DOC/DOCX are converted to plain text when possible. Use offset/limit for large files.',
     inputSchema: z.object({
       path: z.string().describe('Path relative to cwd or absolute within allowed roots'),
       offset: z.number().optional().describe('Line offset (0-based)'),
@@ -105,7 +109,21 @@ export function createBuiltinTools(
     checkPermissions: async (_input, _ctx) => perm(sandbox, ['read_fs']),
     call: async (input, _ctx) => {
       const abs = resolveSandboxedPath(input.path, workspaceCwd, sandbox);
-      let text = await readFileSafe(abs, 500_000);
+      let text: string;
+      if (isBinaryExtractablePath(abs)) {
+        const extracted = await extractTextFromBinaryFile(abs);
+        if (extracted !== null && extracted.length > 0) {
+          text = extracted;
+          if (text.length > 500_000) text = text.slice(0, 500_000) + '\n... [truncated]';
+        } else {
+          return {
+            success: false,
+            error: `Could not extract text from ${path.basename(abs)} (unsupported or corrupt).`,
+          };
+        }
+      } else {
+        text = await readFileSafe(abs, 500_000);
+      }
       if (input.offset !== undefined || input.limit !== undefined) {
         const lines = text.split('\n');
         const start = input.offset ?? 0;
@@ -118,7 +136,8 @@ export function createBuiltinTools(
 
   const writeFile = buildTool({
     name: 'write_file',
-    descriptionText: 'Create or overwrite a file with the given UTF-8 content. Creates parent directories as needed.',
+    descriptionText:
+      'Create or overwrite a file with the given UTF-8 content (UTF-8). Creates parent directories as needed. Paths are relative to the workspace cwd (Kevin: cwd is the user Library / 「文档库」 mount root).',
     inputSchema: z.object({
       path: z.string(),
       content: z.string(),

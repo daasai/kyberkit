@@ -54,6 +54,11 @@ export interface AssemblyContext {
   userTurnText?: string;
   /** Pre-rendered active skill sections (from SkillDiscovery). */
   skillContext?: string;
+  /**
+   * Kevin Rev3: per-turn UI hint (e.g. selected Library folder) appended under Environment.
+   * Not persisted to chat history — only affects this model turn.
+   */
+  libraryUiContext?: string;
 }
 
 

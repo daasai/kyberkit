@@ -132,6 +132,10 @@ MVP 内测中应验证：
 - 用户能说清 Kevin 与飞书/Notion 的分工。
 - 用户能区分 Material、Artifact、Action。
 - 用户认为 Kevin 的输出不是一次性聊天结果，而是可持续管理的工作对象。
+- 用户能复述 Kevin 的差异化标签：**不止 Chat，始终 Always-on**。
+- 用户能说清 Always-on 不是“自动替我决策”，而是“持续维护上下文、提醒变化、推动已授权闭环”。
+- 用户能说清 Kevin 的私域边界：当前 Workspace 绑定了哪些目录和 Connector。
+- 用户至少看到一次“Kevin 从我的反馈中改变了后续输出”的证据。
 
 ## 6. 行为指标
 
@@ -142,12 +146,13 @@ MVP 内测中应验证：
 - 完成至少一次 Review/Diff。
 - 完成至少一次 External Projection。
 - 完成至少一次 ActionRequest Sign-off。
+- 完成至少一次 C3 行为偏好可见闭环：形成偏好 → 透明应用 → 用户可禁用/删除。
 
 ## 7. 智能程度指标
 
 ### 7.0 评测任务集（MVP 内测用）
 
-内测阶段使用以下 7 个任务作为结构化评测集，覆盖两个主场景。
+内测阶段使用以下 9 个任务作为结构化评测集，覆盖两个主场景和两个新增心智验证任务。
 
 | # | 场景 | 任务描述 | 主要评估指标 |
 |---|---|---|---|
@@ -158,6 +163,8 @@ MVP 内测中应验证：
 | T5 | Data Analysis | 在 Weekly Ops Review 中追问"DAU 本周下降的可能原因"；Answer 必须 source 到正确 Query Result Material | Grounding Accuracy |
 | T6 | Data Analysis | 从 Weekly Ops Review 的 `action_plan` 触发一个 ActionRequest；验证 preview 和 sign-off 流程 | Action Decision Precision |
 | T7 | Cross-scenario | 完整走通：添加 Materials → 生成 Artifact → Review/Diff → 查看 Evidence → 投影到飞书 → 查看 Audit | Task Success Rate |
+| T8 | Always-on / First Encounter | 用户指认一个真实工作目录，Kevin 在 10 秒内生成 directory_cognition；关闭再进入 Workspace 后能展示项目状态和 Suggested Next Step | First Encounter Accuracy, Always-on Recall |
+| T9 | Cognitive Capital / My Kevin | 用户连续 3 次修改同类 diff 或使用预置测试信号，Kevin 形成 C3 行为偏好；下一次同类生成透明应用该偏好，且 My Kevin 中可查看、禁用、删除 | Cognitive Capital Visibility, Preference Control |
 
 **T7 系统判断条件：**
 
@@ -237,6 +244,47 @@ ActionRequest 的风险等级与 sign-off 建议是否被用户认可。
 
 **合格标准：** 同一 Artifact 在 5 次交互内不需要全量重写
 
+### 7.7 Always-on Recall
+
+用户是否感知 Kevin 是持续服务，而不是单次聊天。
+
+**评估方式：**
+
+- T8：用户创建 Workspace 后离开再回来，观察 Home 是否展示项目状态、材料变化、下一步建议。
+- 访谈问题："Kevin 和 ChatGPT/Claude 的差别是什么？"
+- 记录用户是否自发表达“它记得这个 Workspace / 它知道项目进展 / 它不是一次一问”。
+
+**合格标准：** ≥ 70% 内测用户能在不看文案的情况下说出“持续服务 / Always-on / 记得工作状态”中的至少一个核心概念。
+
+### 7.8 Cognitive Capital Visibility
+
+用户是否看见 Kevin 在从反馈中进化。
+
+**评估方式：**
+
+- T9：连续 3 次同类 diff 修改或使用预置测试信号，形成一条 C3 行为偏好。
+- 用户在 My Kevin 中查看该偏好，理解来源，并尝试禁用或删除。
+- 下一次同类生成时，Kevin 透明标注“按你在这个项目里的习惯”。
+
+**合格标准：** 用户能完成查看/禁用/删除路径，并能解释这条偏好如何影响 Kevin 后续输出。
+
+### 7.9 WorkType Pack Sanity Check
+
+验证 Kevin 的专业工种扩展逻辑没有过拟合 PM 场景。
+
+**评估方式：**
+
+- MVP 主验收仍以 Product / Project Work Pack 为主。
+- 额外选取 3 个轻量真实目录：内容创作、投资研究、研究/分析各 1 个。
+- 只跑第一次见面和 directory_cognition，不要求生成完整 Artifact。
+
+**合格标准：**
+
+- Kevin 不把非 PM 目录硬识别为 PRD / 产品项目。
+- 低置信时主动询问用户选择 WorkType Pack。
+- 至少生成 1 条引用具体文件的发现或建议。
+- 不出现 PM 场景专属术语污染非 PM 场景。
+
 ## 8. 技术验收指标
 
 - Artifact 独立于 Session 持久化。
@@ -247,6 +295,8 @@ ActionRequest 的风险等级与 sign-off 建议是否被用户认可。
 - Evidence Chain 数据可供抽样评估。
 - Data Warehouse 查询结果可材料化为 Material。
 - 至少一组核心指标有 Metric Dictionary。
+- Workspace 可绑定 `work_type` / WorkType Pack。
+- My Kevin 可查看和管理至少 C2/C3/C4 三类认知资本。
 
 ## 9. MVP 风险
 
@@ -286,3 +336,11 @@ Create Workspace
 - Kevin 为什么不是普通 AI Chat
 - Kevin 为什么不替代飞书/Notion
 - Kevin 如何把 AI 工作变成可审查、可执行、可沉淀的流程
+- Kevin 的 Always-on 服务边界是什么
+- Kevin 如何从用户反馈中形成偏好或方法
+
+MVP 还必须让用户亲眼看到一次：
+
+```text
+反馈 → 偏好形成 → 下次透明应用 → 用户可控制
+```

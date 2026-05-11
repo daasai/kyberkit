@@ -59,8 +59,9 @@ describe('SessionManager artifact default path', () => {
     const session = await manager.create(s)
 
     manager.saveArtifact(s, session.id, '# artifact', 'reports/daily')
-    const files = readdirSync(join(mount, 'reports/daily')).filter((n) => n.startsWith('artifact-') && n.endsWith('.md'))
+    const files = readdirSync(join(mount, 'reports/daily')).filter((n) => n.endsWith('.md'))
     expect(files.length).toBe(1)
+    expect(files[0]).toMatch(/^artifact\.md$/i)
     const body = readFileSync(join(mount, 'reports/daily', files[0]), 'utf-8')
     expect(body).toContain('# artifact')
   })
@@ -75,8 +76,9 @@ describe('SessionManager artifact default path', () => {
     const session = await manager.create(s)
 
     manager.saveArtifact(s, session.id, 'root artifact', '')
-    const files = readdirSync(mount).filter((n) => n.startsWith('artifact-') && n.endsWith('.md'))
+    const files = readdirSync(mount).filter((n) => n.endsWith('.md'))
     expect(files.length).toBe(1)
+    expect(files[0]).toBe('root artifact.md')
     expect(existsSync(join(mount, files[0]))).toBe(true)
   })
 })

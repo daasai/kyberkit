@@ -4,7 +4,7 @@
  *  - 待签批 (awaiting-signoff) 始终置顶，逐条展示。
  *  - 同一 Skill 在 1 小时滚动窗内 ≥3 次完成 → 折叠为聚合卡。
  *  - 失败 / 取消单独展示。
- *  - 通过 `/events/space` SSE 实时刷新。
+ *  - 通过 `/events/space` SSE 实时刷新；SSE 成功时停止轮询，断线时降级轮询。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -21,6 +21,16 @@ interface TaskRow extends RawTaskRow {
   payload?: string | null
 }
 
+function upsertTask(prev: TaskRow[], task: TaskRow): TaskRow[] {
+  const idx = prev.findIndex((t) => t.id === task.id)
+  if (idx >= 0) {
+    const next = [...prev]
+    next[idx] = { ...next[idx], ...task }
+    return next
+  }
+  return [...prev, task]
+}
+
 export function NotificationCenter({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { spaceId } = useSession()
   const [tasks, setTasks] = useState<TaskRow[]>([])
@@ -35,36 +45,84 @@ export function NotificationCenter({ open, onClose }: { open: boolean; onClose: 
 
   useEffect(() => {
     if (!open || !spaceId) return
-    load()
-    const id = window.setInterval(load, 5000)
+
+    void load()
+
+    let pollId: ReturnType<typeof setInterval> | null = null
+    const startPoll = () => {
+      if (pollId != null) return
+      pollId = window.setInterval(() => {
+        void load()
+      }, 5000)
+    }
+    const stopPoll = () => {
+      if (pollId != null) {
+        window.clearInterval(pollId)
+        pollId = null
+      }
+    }
+
+    /** Until first SSE `open`, keep polling as fallback (then stop). */
+    const fallbackTimer = window.setTimeout(() => {
+      startPoll()
+    }, 2000)
+
     let es: EventSource | null = null
     try {
       es = new EventSource(`${SIDECAR_URL}/events/space${qsSpace(spaceId)}`)
-      const refresh = () => load()
+      es.onopen = () => {
+        window.clearTimeout(fallbackTimer)
+        stopPoll()
+      }
       es.addEventListener('message', (ev) => {
         try {
-          const data = JSON.parse((ev as MessageEvent).data)
-          if (
-            data?.type === 'task_progress' ||
-            data?.type === 'task_completed' ||
-            data?.type === 'task_cancelled' ||
-            data?.type === 'signoff_required'
-          ) {
-            refresh()
+          const data = JSON.parse((ev as MessageEvent).data) as {
+            type?: string
+            task?: TaskRow
+            task_id?: string
+          }
+          if (data?.task && typeof data.task === 'object' && typeof data.task.id === 'string') {
+            setTasks((prev) => upsertTask(prev, data.task as TaskRow))
+            return
+          }
+          if (data?.type === 'task_cancelled' && typeof data.task_id === 'string') {
+            const id = data.task_id
+            setTasks((prev) =>
+              prev.map((t) =>
+                t.id === id
+                  ? {
+                      ...t,
+                      state: 'cancelled',
+                      updated_at: new Date().toISOString(),
+                    }
+                  : t,
+              ),
+            )
+            return
+          }
+          if (data?.type === 'signoff_required' && typeof data.task_id === 'string') {
+            void load()
           }
         } catch {
           /* ignore non-JSON ping frames */
         }
       })
       es.onerror = () => {
-        // EventSource auto-retries; keep polling as backup.
+        startPoll()
       }
     } catch {
       es = null
+      startPoll()
     }
+
     return () => {
-      window.clearInterval(id)
-      try { es?.close() } catch { /* ignore */ }
+      window.clearTimeout(fallbackTimer)
+      stopPoll()
+      try {
+        es?.close()
+      } catch {
+        /* ignore */
+      }
     }
   }, [open, spaceId, load])
 

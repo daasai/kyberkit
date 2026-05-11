@@ -166,6 +166,8 @@ export class AgentSession {
   private readonly trajectory?: TrajectoryRecorder;
   private readonly skillRunner?: SkillSuggestionRunner;
   private readonly learningLoop?: LearningLoopMiddleware;
+  /** Kevin Rev3: tear down per-session MCP processes (library-scoped roots). */
+  private readonly sessionMcpCleanup?: () => Promise<void>;
 
   private turnToolLog: Array<{ name: string; input: unknown }> = [];
   private lastUserText = '';
@@ -190,7 +192,12 @@ export class AgentSession {
     reliability: ReliabilityLayer,
     cleanup?: () => Promise<void>,
     trajectory?: TrajectoryRecorder,
-    extras?: { skillSuggestion?: SkillSuggestionRunner; learningLoop?: LearningLoopMiddleware },
+    extras?: {
+      skillSuggestion?: SkillSuggestionRunner
+      learningLoop?: LearningLoopMiddleware
+      /** Kevin Rev3: tear down per-session MCP processes (library-scoped roots). */
+      sessionMcpCleanup?: () => Promise<void>
+    },
   ) {
     this.id = id;
     this.agent = agent;
@@ -200,6 +207,7 @@ export class AgentSession {
     this.trajectory = trajectory;
     this.skillRunner = extras?.skillSuggestion;
     this.learningLoop = extras?.learningLoop;
+    this.sessionMcpCleanup = extras?.sessionMcpCleanup;
   }
 
   /** Returns a snapshot of the current cumulative usage. */
@@ -220,7 +228,7 @@ export class AgentSession {
    */
   async *send(
     input: string,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; libraryUiHint?: string },
   ): AsyncGenerator<AgentEvent> {
     if (opts?.signal?.aborted) return;
 
@@ -266,6 +274,11 @@ export class AgentSession {
     // as 'completed' (terminal). Reset to 'running' for the next send().
     if (this.agent.status === 'completed' || this.agent.status === 'completing') {
       this.agent.status = 'running';
+    }
+
+    const hint = opts?.libraryUiHint?.trim();
+    if (hint) {
+      this.deps.turnLibraryUiHint = hint;
     }
 
     let turnId: string | undefined;
@@ -355,6 +368,7 @@ export class AgentSession {
         }
       }
     } finally {
+      this.deps.turnLibraryUiHint = undefined;
       if (turnId && this.trajectory) {
         this.trajectory.finalizeTurn(turnId, {
           interrupted,
@@ -469,6 +483,11 @@ export class AgentSession {
     }
     this.reliability.memory.close();
     this.trajectory?.close();
+    try {
+      await this.sessionMcpCleanup?.()
+    } catch {
+      // best-effort MCP teardown
+    }
     await this.cleanup?.();
   }
 }

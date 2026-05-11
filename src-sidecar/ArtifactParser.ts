@@ -19,6 +19,35 @@ export type SidecarTextEvent =
 const OPEN_TAG = '<artifact>'
 const CLOSE_TAG = '</artifact>'
 
+/**
+ * While already inside an artifact, the model sometimes emits a second `<artifact...>`
+ * (often after meta text like "以下是完整文档"). That must not reach the canvas as body:
+ * we strip complete nested opening tags only.
+ */
+function stripNestedArtifactOpensInArtifactBody(buf: string): string {
+  let s = buf
+  while (true) {
+    const m = s.match(/<artifact\b/i)
+    if (!m || m.index === undefined) break
+    const i = m.index
+    const tail = s.slice(i)
+    const gt = tail.indexOf('>')
+    if (gt < 0) break
+    const after = i + gt + 1
+    s = s.slice(0, i) + s.slice(after).replace(/^\r?\n/, '')
+  }
+  return s
+}
+
+/** Longest suffix of `buf` that is a proper prefix of `tag` (streaming partial tag holdback). */
+function tagPrefixHoldback(buf: string, tag: string): number {
+  const max = Math.min(buf.length, tag.length - 1)
+  for (let k = max; k >= 1; k--) {
+    if (buf.endsWith(tag.slice(0, k))) return k
+  }
+  return 0
+}
+
 export class ArtifactParser {
   private buf = ''
   private mode: 'text' | 'artifact' = 'text'
@@ -26,12 +55,18 @@ export class ArtifactParser {
   /** Feed new text from a text_delta event. Returns derived events to emit. */
   feed(text: string): SidecarTextEvent[] {
     this.buf += text
+    if (this.mode === 'artifact') {
+      this.buf = stripNestedArtifactOpensInArtifactBody(this.buf)
+    }
     return this._drain()
   }
 
   /** Call when the stream ends to flush any remaining buffered text. */
   flush(): SidecarTextEvent[] {
     const out: SidecarTextEvent[] = []
+    if (this.mode === 'artifact') {
+      this.buf = stripNestedArtifactOpensInArtifactBody(this.buf)
+    }
     if (this.buf.length > 0) {
       out.push({
         type: this.mode === 'artifact' ? 'artifact_delta' : 'text_delta',
@@ -59,9 +94,11 @@ export class ArtifactParser {
       const idx = this.buf.indexOf(tag)
 
       if (idx === -1) {
-        // Tag not found — emit everything except the last (tag.length - 1) chars
-        // which could be a partial tag at the buffer boundary.
-        const safe = this.buf.length - (tag.length - 1)
+        // Tag not found — emit all except a suffix that might be the start of `tag`
+        // (e.g. `</arti` while streaming `</artifact>`). Never use a fixed (tag.length-1)
+        // holdback in artifact mode or short body text gets truncated.
+        const hold = tagPrefixHoldback(this.buf, tag)
+        const safe = this.buf.length - hold
         if (safe > 0) {
           out.push({
             type: this.mode === 'artifact' ? 'artifact_delta' : 'text_delta',

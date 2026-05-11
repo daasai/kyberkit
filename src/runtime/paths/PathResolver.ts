@@ -236,6 +236,33 @@ export function upsertSpaceLibraryBinding(binding: SpaceLibraryBinding): void {
   writeSpaceLibraryRegistry(filtered)
 }
 
+/** Updates `displayName` for a bound Space; empty string clears custom name. */
+export function updateSpaceLibraryDisplayName(spaceId: string, displayName: string): SpaceLibraryBinding | null {
+  const sid = spaceId.trim()
+  const rows = readSpaceLibraryRegistry()
+  const idx = rows.findIndex((r) => r.spaceId === sid)
+  if (idx < 0) return null
+  const trimmed = displayName.trim()
+  const nextRow: SpaceLibraryBinding = {
+    ...rows[idx],
+    displayName: trimmed.length > 0 ? trimmed : undefined,
+  }
+  const copy = [...rows]
+  copy[idx] = nextRow
+  writeSpaceLibraryRegistry(copy)
+  return nextRow
+}
+
+/** Removes the registry row for this Space and returns the removed binding, if any. */
+export function removeSpaceLibraryBinding(spaceId: string): SpaceLibraryBinding | null {
+  const sid = spaceId.trim()
+  const rows = readSpaceLibraryRegistry()
+  const found = rows.find((r) => r.spaceId === sid) ?? null
+  if (!found) return null
+  writeSpaceLibraryRegistry(rows.filter((r) => r.spaceId !== sid))
+  return found
+}
+
 export function resolveSpaceToLibrary(spaceId: string): SpaceLibraryBinding | null {
   const key = spaceId.trim()
   if (!key) return null

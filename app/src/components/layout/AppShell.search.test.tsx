@@ -15,14 +15,21 @@ vi.mock('../../contexts/SessionContext', () => ({
 
 vi.mock('../../contexts/ArtifactContext', () => ({
   useArtifact: () => ({
-    artifact: { streaming: false },
+    artifact: { streaming: false, libraryFileRef: null, savedPath: null, sessionId: null, content: '', loadSeq: 0 },
     loadArtifact: vi.fn(),
+    openLibraryDocument: vi.fn(),
     clearArtifact: vi.fn(),
   }),
 }))
 
 vi.mock('./AppHeader', () => ({
-  AppHeader: () => <header>Kevin Header</header>,
+  AppHeader: (p: { onOpenSearch?: () => void }) => (
+    <header>
+      <button type="button" onClick={() => p.onOpenSearch?.()}>
+        搜索
+      </button>
+    </header>
+  ),
 }))
 
 vi.mock('./CenterPanel', () => ({
@@ -58,7 +65,7 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
     spaceId: SPACE_A,
     setSpaceId: vi.fn(),
     spaces: [{ id: SPACE_A, label: '默认 Space' }],
-    refreshSpaces: vi.fn().mockResolvedValue(undefined),
+    refreshSpaces: vi.fn().mockResolvedValue([{ id: SPACE_A, label: '默认 Space' }]),
     sessions: [
       { id: 's1', title: 'Growth Weekly Sync', createdAt: iso(120_000), updatedAt: iso(60_000), artifactPreview: 'weekly report summary' },
       { id: 's2', title: 'Finance Notes', createdAt: iso(300_000), updatedAt: iso(30_000), artifactPreview: 'budget planning' },
@@ -68,6 +75,10 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
     createSession: vi.fn(async () => 'new'),
     deleteSession: vi.fn(async () => {}),
     refreshSessions: vi.fn(async () => {}),
+    pinSession: vi.fn(async () => {}),
+    createSpaceLibrary: vi.fn(async () => ({ id: SPACE_A, label: '默认 Space' })),
+    updateSpaceDisplayName: vi.fn(async () => {}),
+    deleteSpace: vi.fn(async () => {}),
     openSpaceInNewWindow: vi.fn(async () => 'focused' as const),
     ...overrides,
   } as ReturnType<typeof useSession>
@@ -84,18 +95,18 @@ describe('AppShell global search', () => {
     vi.restoreAllMocks()
   })
 
-  it('opens a searchable center overlay from the sidebar without replacing the editor view', () => {
+  it('opens embedded global search from the header, replacing the editor center', () => {
     render(<AppShell />)
 
     fireEvent.click(screen.getByText('搜索'))
 
-    const dialog = screen.getByRole('dialog', { name: '全局搜索' })
-    const input = within(dialog).getByPlaceholderText('搜索会话标题或制品摘要...')
-    expect(screen.getByTestId('editor-center-panel')).toBeInTheDocument()
+    const region = screen.getByRole('region', { name: '全局搜索' })
+    const input = within(region).getByPlaceholderText(/搜索会话标题、制品摘要或文档库正文/)
+    expect(screen.queryByTestId('editor-center-panel')).not.toBeInTheDocument()
     expect(input).toHaveFocus()
 
     fireEvent.change(input, { target: { value: 'growth' } })
-    expect(within(dialog).getByText('Growth Weekly Sync')).toBeInTheDocument()
+    expect(within(region).getByText('Growth Weekly Sync')).toBeInTheDocument()
   })
 
   it('selects a search result and closes the overlay', () => {
@@ -105,12 +116,12 @@ describe('AppShell global search', () => {
     render(<AppShell />)
 
     fireEvent.click(screen.getByText('搜索'))
-    const dialog = screen.getByRole('dialog', { name: '全局搜索' })
-    fireEvent.change(within(dialog).getByPlaceholderText('搜索会话标题或制品摘要...'), { target: { value: 'finance' } })
-    fireEvent.click(within(dialog).getByText('Finance Notes'))
+    const region = screen.getByRole('region', { name: '全局搜索' })
+    fireEvent.change(within(region).getByPlaceholderText(/搜索会话标题、制品摘要或文档库正文/), { target: { value: 'finance' } })
+    fireEvent.click(within(region).getByText('Finance Notes'))
 
     expect(setActiveSessionId).toHaveBeenCalledWith('s2')
-    expect(screen.queryByRole('dialog', { name: '全局搜索' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '全局搜索' })).not.toBeInTheDocument()
     expect(screen.getByTestId('editor-center-panel')).toBeInTheDocument()
   })
 

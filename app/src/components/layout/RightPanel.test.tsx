@@ -19,14 +19,17 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
     spaceId: SPACE_A,
     setSpaceId: vi.fn(),
     spaces: [{ id: SPACE_A, label: '默认 Space' }],
-    refreshSpaces: vi.fn(async () => {}),
+    refreshSpaces: vi.fn(async () => [{ id: SPACE_A, label: '默认 Space' }]),
     sessions: [],
     activeSessionId: 's1',
     setActiveSessionId: vi.fn(),
     createSession: vi.fn(async () => 's1'),
     deleteSession: vi.fn(async () => {}),
     refreshSessions: vi.fn(async () => {}),
+    pinSession: vi.fn(async () => {}),
     createSpaceLibrary: vi.fn(async () => ({ id: SPACE_A, label: '默认 Space' })),
+    updateSpaceDisplayName: vi.fn(async () => {}),
+    deleteSpace: vi.fn(async () => {}),
     openSpaceInNewWindow: vi.fn(async () => 'focused' as const),
     ...overrides,
   } as ReturnType<typeof useSession>
@@ -34,12 +37,14 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
 
 function baseArtifactMock(overrides: Partial<ReturnType<typeof useArtifact>> = {}) {
   return {
-    artifact: { sessionId: null, content: '', streaming: false },
+    artifact: { sessionId: null, content: '', streaming: false, savedPath: null, libraryFileRef: null, loadSeq: 0 },
     onArtifactStart: vi.fn(),
     onArtifactDelta: vi.fn(),
     onArtifactEnd: vi.fn(),
     loadArtifact: vi.fn(),
+    openLibraryDocument: vi.fn(),
     clearArtifact: vi.fn(),
+    setSavedPath: vi.fn(),
     ...overrides,
   } as ReturnType<typeof useArtifact>
 }
@@ -80,10 +85,11 @@ describe('RightPanel', () => {
     vi.restoreAllMocks()
   })
 
-  it('does not host primary artifact canvas; shows process tracker', () => {
+  it('does not host primary artifact canvas; shows session artifact strip (UAT-003)', () => {
     render(<RightPanel />)
     expect(screen.queryByTestId('artifact-primary-view')).not.toBeInTheDocument()
     expect(screen.getByTestId('process-tracker')).toBeInTheDocument()
+    expect(screen.getByText('本会话制品')).toBeInTheDocument()
   })
 
   it('shows context attribution strip', () => {

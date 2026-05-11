@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { SpaceMeta } from '../../contexts/SessionContext'
+import { LibraryMountPathPicker } from '../common/LibraryMountPathPicker'
 
 export function SpaceManagerPanel({
   open,
@@ -9,6 +10,8 @@ export function SpaceManagerPanel({
   onSwitchSpace,
   onCreateSpace,
   onOpenInNewWindow,
+  onRenameSpace,
+  onDeleteSpace,
 }: {
   open: boolean
   spaces: SpaceMeta[]
@@ -17,11 +20,17 @@ export function SpaceManagerPanel({
   onSwitchSpace: (spaceId: string) => void
   onCreateSpace: (mountPath: string, displayName?: string) => Promise<void>
   onOpenInNewWindow: (spaceId: string) => Promise<void>
+  onRenameSpace?: (spaceId: string, displayName: string) => Promise<void>
+  onDeleteSpace?: (spaceId: string) => Promise<void>
 }) {
   const [displayName, setDisplayName] = useState('')
   const [mountPath, setMountPath] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [renameForId, setRenameForId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renameBusy, setRenameBusy] = useState(false)
+  const [renameErr, setRenameErr] = useState<string | null>(null)
 
   const currentSpace = useMemo(
     () => spaces.find((s) => s.id === currentSpaceId) ?? null,
@@ -32,7 +41,7 @@ export function SpaceManagerPanel({
 
   const submitCreate = async () => {
     if (!mountPath.trim()) {
-      setErr('请填写 Library 挂载目录（绝对路径）')
+      setErr('请选择或填写 Library 挂载目录（绝对路径）')
       return
     }
     setBusy(true)
@@ -45,6 +54,55 @@ export function SpaceManagerPanel({
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  const beginRename = (space: SpaceMeta) => {
+    setRenameErr(null)
+    setRenameForId(space.id)
+    setRenameDraft(space.label || space.id)
+  }
+
+  const cancelRename = () => {
+    setRenameForId(null)
+    setRenameDraft('')
+    setRenameErr(null)
+  }
+
+  const submitRename = async () => {
+    if (!onRenameSpace || !renameForId) return
+    const name = renameDraft.trim()
+    if (!name) {
+      setRenameErr('显示名称不能为空')
+      return
+    }
+    setRenameBusy(true)
+    setRenameErr(null)
+    try {
+      await onRenameSpace(renameForId, name)
+      cancelRename()
+    } catch (e: unknown) {
+      setRenameErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRenameBusy(false)
+    }
+  }
+
+  const confirmDelete = async (space: SpaceMeta) => {
+    if (!onDeleteSpace) return
+    const ok = window.confirm(
+      `确定删除 Space「${space.label || space.id}」？\n将移除注册信息并删除该 Library 的本地会话数据库（文档库目录不会删除）。`,
+    )
+    if (!ok) return
+    setRenameErr(null)
+    setRenameBusy(true)
+    try {
+      await onDeleteSpace(space.id)
+      if (renameForId === space.id) cancelRename()
+    } catch (e: unknown) {
+      setRenameErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRenameBusy(false)
     }
   }
 
@@ -77,40 +135,152 @@ export function SpaceManagerPanel({
       >
         <div style={{ borderRight: '1px solid var(--color-outline-variant)', display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '16px 16px 10px', borderBottom: '1px solid var(--color-outline-variant)' }}>
-            <div style={{ fontSize: '18px', fontWeight: 700 }}>Space</div>
-            <div style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)', marginTop: '4px' }}>
+            <div style={{ fontSize: '15px', fontWeight: 700 }}>Space</div>
+            <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: '4px' }}>
               选择现有 Space，或在右侧新建
             </div>
           </div>
           <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+            {renameErr ? (
+              <div style={{ color: 'var(--color-error)', fontSize: '11px', marginBottom: '8px', padding: '0 4px' }}>
+                {renameErr}
+              </div>
+            ) : null}
             {spaces.map((space) => {
               const active = space.id === currentSpaceId
+              const editing = renameForId === space.id
               return (
-                <button
+                <div
                   key={space.id}
-                  type="button"
-                  onClick={() => onSwitchSpace(space.id)}
                   style={{
-                    width: '100%',
-                    border: 'none',
-                    background: active ? 'var(--color-surface-container)' : 'transparent',
+                    marginBottom: '8px',
                     borderRadius: '10px',
-                    textAlign: 'left',
-                    padding: '10px 12px',
-                    marginBottom: '4px',
-                    cursor: 'pointer',
-                    color: 'var(--color-on-surface)',
+                    border: active ? '1px solid var(--color-primary)' : '1px solid transparent',
+                    background: active ? 'var(--color-surface-container)' : 'transparent',
+                    padding: '8px',
                   }}
                 >
-                  <div style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span>{space.label || space.id}</span>
-                    {active ? <span style={{ color: 'var(--color-primary)', fontSize: '12px' }}>当前</span> : null}
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                    <button
+                      type="button"
+                      onClick={() => onSwitchSpace(space.id)}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        border: 'none',
+                        background: 'transparent',
+                        borderRadius: '8px',
+                        textAlign: 'left',
+                        padding: '4px 6px',
+                        cursor: 'pointer',
+                        color: 'var(--color-on-surface)',
+                      }}
+                    >
+                      <div style={{ fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span>{space.label || space.id}</span>
+                        {active ? <span style={{ color: 'var(--color-primary)', fontSize: '12px' }}>当前</span> : null}
+                      </div>
+                      <div style={{ fontSize: '11px', marginTop: '3px', color: 'var(--color-on-surface-variant)' }}>{space.id}</div>
+                      <div style={{ fontSize: '11px', marginTop: '2px', color: 'var(--color-on-surface-variant)' }}>
+                        {space.mountPath || '挂载路径未知'}
+                      </div>
+                    </button>
+                    {onRenameSpace || onDeleteSpace ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flexShrink: 0 }}>
+                        {onRenameSpace ? (
+                          <button
+                            type="button"
+                            disabled={renameBusy}
+                            onClick={() => (editing ? cancelRename() : beginRename(space))}
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              padding: '4px 8px',
+                              borderRadius: '6px',
+                              border: '1px solid var(--color-outline-variant)',
+                              background: 'var(--color-surface-container-lowest)',
+                              cursor: renameBusy ? 'wait' : 'pointer',
+                              color: 'var(--color-on-surface)',
+                            }}
+                          >
+                            {editing ? '取消' : '重命名'}
+                          </button>
+                        ) : null}
+                        {onDeleteSpace ? (
+                          <button
+                            type="button"
+                            disabled={renameBusy}
+                            onClick={() => void confirmDelete(space)}
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              padding: '4px 8px',
+                              borderRadius: '6px',
+                              border: '1px solid var(--color-error)',
+                              background: 'transparent',
+                              cursor: renameBusy ? 'wait' : 'pointer',
+                              color: 'var(--color-error)',
+                            }}
+                          >
+                            删除
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
-                  <div style={{ fontSize: '11px', marginTop: '3px', color: 'var(--color-on-surface-variant)' }}>{space.id}</div>
-                  <div style={{ fontSize: '11px', marginTop: '2px', color: 'var(--color-on-surface-variant)' }}>
-                    {space.mountPath || '挂载路径未知'}
-                  </div>
-                </button>
+                  {editing && onRenameSpace ? (
+                    <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <input
+                        type="text"
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        disabled={renameBusy}
+                        style={{
+                          width: '100%',
+                          padding: '6px 8px',
+                          borderRadius: '6px',
+                          border: '1px solid var(--color-outline-variant)',
+                          fontSize: '12px',
+                        }}
+                      />
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          type="button"
+                          disabled={renameBusy}
+                          onClick={() => void submitRename()}
+                          style={{
+                            border: 'none',
+                            borderRadius: '6px',
+                            padding: '6px 10px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: renameBusy ? 'wait' : 'pointer',
+                            color: 'var(--color-on-primary)',
+                            background: 'var(--color-primary)',
+                          }}
+                        >
+                          {renameBusy ? '保存中…' : '保存'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={renameBusy}
+                          onClick={cancelRename}
+                          style={{
+                            border: '1px solid var(--color-outline-variant)',
+                            borderRadius: '6px',
+                            padding: '6px 10px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            cursor: renameBusy ? 'wait' : 'pointer',
+                            background: 'var(--color-surface)',
+                          }}
+                        >
+                          关闭
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               )
             })}
           </div>
@@ -119,8 +289,8 @@ export function SpaceManagerPanel({
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '16px', borderBottom: '1px solid var(--color-outline-variant)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <div style={{ fontSize: '16px', fontWeight: 700 }}>新建 Space</div>
-              <div style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)', marginTop: '4px' }}>
+              <div style={{ fontSize: '14px', fontWeight: 700 }}>新建 Space</div>
+              <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: '4px' }}>
                 Space 与 Library 一对一绑定
               </div>
             </div>
@@ -135,7 +305,7 @@ export function SpaceManagerPanel({
           </div>
 
           <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <label htmlFor="space-manager-display-name" style={{ fontSize: '12px', fontWeight: 600 }}>
+            <label htmlFor="space-manager-display-name" style={{ fontSize: '11px', fontWeight: 600 }}>
               显示名称（可选）
             </label>
             <input
@@ -144,21 +314,19 @@ export function SpaceManagerPanel({
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="例如：工作库 / health / docs"
-              style={{ padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--color-outline-variant)' }}
+              style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--color-outline-variant)', fontSize: '13px' }}
             />
-            <label htmlFor="space-manager-mount-path" style={{ fontSize: '12px', fontWeight: 600 }}>
-              Library 挂载路径（绝对路径）
+            <label htmlFor="space-manager-mount-path" style={{ fontSize: '11px', fontWeight: 600, marginTop: '4px' }}>
+              Library 挂载路径
             </label>
-            <input
-              id="space-manager-mount-path"
-              type="text"
+            <LibraryMountPathPicker
               value={mountPath}
-              onChange={(e) => setMountPath(e.target.value)}
-              placeholder="/Users/you/Documents/MyVault"
-              style={{ padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--color-outline-variant)' }}
+              onChange={setMountPath}
+              disabled={busy}
+              inputId="space-manager-mount-path"
             />
             {err ? (
-              <div style={{ color: 'var(--color-error)', fontSize: '12px' }}>{err}</div>
+              <div style={{ color: 'var(--color-error)', fontSize: '11px' }}>{err}</div>
             ) : null}
             <button
               type="button"
@@ -168,7 +336,8 @@ export function SpaceManagerPanel({
                 marginTop: '4px',
                 border: 'none',
                 borderRadius: '8px',
-                padding: '10px 12px',
+                padding: '9px 12px',
+                fontSize: '13px',
                 fontWeight: 700,
                 cursor: busy ? 'wait' : 'pointer',
                 color: 'var(--color-on-primary)',
@@ -182,8 +351,8 @@ export function SpaceManagerPanel({
 
           <div style={{ marginTop: 'auto', borderTop: '1px solid var(--color-outline-variant)', padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-on-surface-variant)' }}>当前 Space</div>
-              <div style={{ fontSize: '13px', fontWeight: 600, marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--color-on-surface-variant)' }}>当前 Space</div>
+              <div style={{ fontSize: '12px', fontWeight: 600, marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {currentSpace?.label ?? currentSpaceId}
               </div>
             </div>

@@ -22,7 +22,7 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
     spaceId: SPACE_A,
     setSpaceId: vi.fn(),
     spaces: [{ id: SPACE_A, label: '默认 Space' }],
-    refreshSpaces: vi.fn().mockResolvedValue(undefined),
+    refreshSpaces: vi.fn().mockResolvedValue([{ id: SPACE_A, label: '默认 Space' }]),
     sessions: [
       { id: 's1', title: 'Chat One', createdAt: iso(120_000), updatedAt: iso(60_000) },
       { id: 's2', title: 'Chat Two', createdAt: iso(300_000), updatedAt: iso(30_000) },
@@ -32,7 +32,10 @@ function baseSessionMock(overrides: Partial<ReturnType<typeof useSession>> = {})
     createSession: vi.fn(async () => 'new'),
     deleteSession: vi.fn(async () => {}),
     refreshSessions: vi.fn(async () => {}),
+    pinSession: vi.fn(async () => {}),
     createSpaceLibrary: vi.fn(async () => ({ id: SPACE_A, label: '默认 Space' })),
+    updateSpaceDisplayName: vi.fn(async () => {}),
+    deleteSpace: vi.fn(async () => {}),
     openSpaceInNewWindow: vi.fn(async () => 'focused' as const),
     ...overrides,
   } as ReturnType<typeof useSession>
@@ -42,6 +45,7 @@ beforeEach(() => {
   vi.mocked(useArtifact).mockReturnValue({
     clearArtifact: vi.fn(),
     loadArtifact: vi.fn(),
+    openLibraryDocument: vi.fn(),
   } as ReturnType<typeof useArtifact>)
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })) as unknown as typeof fetch)
 })
@@ -77,9 +81,58 @@ describe('connectors in sidebar', () => {
     expect(screen.queryByText('Filesystem MCP')).not.toBeInTheDocument()
     expect(screen.queryByText('状态不可用')).not.toBeInTheDocument()
   })
+
+  it('shows only 贝易转 DW when API returns multiple connector rows', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/connectors')) {
+        return {
+          ok: true,
+          json: async () => [
+            { name: 'Filesystem MCP', status: 'healthy', lastSuccess: '刚刚' },
+            { name: '贝易转 DW', status: 'healthy', lastSuccess: '刚刚' },
+          ],
+        } as Response
+      }
+      return { ok: false, json: async () => [] } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    vi.mocked(useSession).mockReturnValue(baseSessionMock())
+
+    render(<LeftSidebar />)
+
+    expect(await screen.findByText('贝易转 DW')).toBeInTheDocument()
+    expect(screen.queryByText('Filesystem MCP')).not.toBeInTheDocument()
+  })
 })
 
 describe('history sessions in sidebar', () => {
+  it('shows at most three sessions until 更多 is expanded', async () => {
+    const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString()
+    vi.mocked(useSession).mockReturnValue(
+      baseSessionMock({
+        sessions: [
+          { id: 's1', title: 'One', createdAt: iso(10_000), updatedAt: iso(10_000) },
+          { id: 's2', title: 'Two', createdAt: iso(20_000), updatedAt: iso(20_000) },
+          { id: 's3', title: 'Three', createdAt: iso(30_000), updatedAt: iso(30_000) },
+          { id: 's4', title: 'Four', createdAt: iso(40_000), updatedAt: iso(40_000) },
+        ],
+        activeSessionId: 's1',
+      }),
+    )
+    render(<LeftSidebar />)
+
+    expect(screen.getByText('One')).toBeInTheDocument()
+    expect(screen.getByText('Two')).toBeInTheDocument()
+    expect(screen.getByText('Three')).toBeInTheDocument()
+    expect(screen.queryByText('Four')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('更多（1）'))
+    expect(await screen.findByText('Four')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('收起'))
+    expect(screen.queryByText('Four')).not.toBeInTheDocument()
+  })
+
   it('switches sessions in-place without opening a new window', () => {
     const setActiveSessionId = vi.fn()
     const openSpaceInNewWindow = vi.fn(async () => 'focused' as const)
@@ -135,9 +188,11 @@ describe('document library in sidebar', () => {
 
   it('shows friendly preview unsupported message for large/binary files', async () => {
     const loadArtifact = vi.fn()
+    const openLibraryDocument = vi.fn()
     vi.mocked(useArtifact).mockReturnValue({
       clearArtifact: vi.fn(),
       loadArtifact,
+      openLibraryDocument,
     } as ReturnType<typeof useArtifact>)
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)

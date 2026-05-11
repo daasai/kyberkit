@@ -77,6 +77,11 @@ export interface AgentLoopDeps {
   outputGuardChecker?: OutputGuardChecker;
   /** Kevin Rev3: session-level logical cwd (Library mount). */
   executionCwd?: string;
+  /**
+   * Kevin Rev3: optional one-turn hint for prompt assembly (e.g. selected document-library folder).
+   * AgentSession sets this immediately before agentLoop and clears after the turn.
+   */
+  turnLibraryUiHint?: string;
 }
 
 
@@ -188,6 +193,7 @@ export async function* agentLoop(
         reliability,
         userTurnText,
         skillContext,
+        libraryUiContext: deps.turnLibraryUiHint,
       });
       systemPrompt = assembled.text;
     } else {
@@ -309,7 +315,7 @@ export async function* agentLoop(
           agent.addMessage('user',
             `Verification failed:\n${verifResult.summary}\nPlease fix the issues and try again.`
           );
-          agent.transition('running');
+          agent.transition('verification_failed');
         }
       }
 

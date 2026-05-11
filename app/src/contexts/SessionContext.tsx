@@ -21,10 +21,11 @@ export interface SpaceMeta {
 }
 
 function syncUrlSpaceId(spaceId: string): void {
-  if (typeof window === 'undefined' || !spaceId) return
+  if (typeof window === 'undefined') return
   try {
     const u = new URL(window.location.href)
-    u.searchParams.set('space_id', spaceId)
+    if (!spaceId) u.searchParams.delete('space_id')
+    else u.searchParams.set('space_id', spaceId)
     window.history.replaceState({}, '', u.toString())
   } catch {
     // ignore URL sync failures
@@ -52,20 +53,24 @@ export interface SessionMeta {
   createdAt: string
   updatedAt: string
   artifactPreview?: string
+  pinned?: boolean
 }
 
 interface SessionContextType {
   spaceId: string
   setSpaceId: (id: string) => void
   spaces: SpaceMeta[]
-  refreshSpaces: () => Promise<void>
+  refreshSpaces: () => Promise<SpaceMeta[]>
   createSpaceLibrary: (mountPath: string, displayName?: string) => Promise<SpaceMeta>
+  updateSpaceDisplayName: (spaceId: string, displayName: string) => Promise<void>
+  deleteSpace: (spaceId: string) => Promise<void>
   sessions: SessionMeta[]
   activeSessionId: string | null
   setActiveSessionId: (id: string) => void
   createSession: () => Promise<string>
   deleteSession: (id: string) => Promise<void>
   refreshSessions: () => Promise<void>
+  pinSession: (id: string, pinned: boolean) => Promise<void>
   /** Opens another Space in a separate window (Tauri) or tab (browser); does not change current window's spaceId. */
   openSpaceInNewWindow: (spaceId: string) => Promise<SpaceSwitchOutcome>
 }
@@ -82,7 +87,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   activeSessionIdRef.current = activeSessionId
 
   const setSpaceId = useCallback((id: string) => {
-    try { localStorage.setItem(SPACE_STORAGE_KEY, id) } catch { /* ignore */ }
+    try {
+      if (id) localStorage.setItem(SPACE_STORAGE_KEY, id)
+      else localStorage.removeItem(SPACE_STORAGE_KEY)
+    } catch { /* ignore */ }
     // Prevent stale session id from leaking across spaces.
     setActiveSessionId(null)
     setSessions([])
@@ -107,12 +115,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [spaceId])
 
-  const refreshSpaces = useCallback(async () => {
+  const pinSession = useCallback(
+    async (id: string, pinned: boolean) => {
+      if (!spaceId) return
+      const res = await fetch(`${SIDECAR_URL}/sessions/${id}${qsSpace(spaceId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned }),
+      })
+      if (!res.ok) return
+      await refreshSessions()
+    },
+    [spaceId, refreshSessions],
+  )
+
+  const refreshSpaces = useCallback(async (): Promise<SpaceMeta[]> => {
     try {
       const res = await fetch(`${SIDECAR_URL}/spaces`)
       if (!res.ok) {
         setSpaces([])
-        return
+        return []
       }
       const data = (await res.json()) as Array<{
         id?: string
@@ -131,8 +153,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             }))
         : []
       setSpaces(next)
+      return next
     } catch {
       setSpaces([])
+      return []
     }
   }, [])
 
@@ -185,6 +209,39 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return next
   }, [setSpaceId])
 
+  const updateSpaceDisplayName = useCallback(async (targetSpaceId: string, displayName: string) => {
+    const res = await fetch(`${SIDECAR_URL}/registry/spaces/${targetSpaceId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName }),
+    })
+    const data = (await res.json().catch(() => ({}))) as { error?: string }
+    if (!res.ok) {
+      const msg = typeof data.error === 'string' ? data.error : `Rename failed (${res.status})`
+      throw new Error(msg)
+    }
+    await refreshSpaces()
+  }, [refreshSpaces])
+
+  const deleteSpace = useCallback(
+    async (targetSpaceId: string) => {
+      const res = await fetch(`${SIDECAR_URL}/registry/spaces/${targetSpaceId}`, { method: 'DELETE' })
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) {
+        const msg = typeof data.error === 'string' ? data.error : `Delete Space failed (${res.status})`
+        throw new Error(msg)
+      }
+      const wasCurrent = targetSpaceId === spaceId
+      const next = await refreshSpaces()
+      if (wasCurrent) {
+        const first = next[0]?.id ?? ''
+        if (first) setSpaceId(first)
+        else setSpaceId('')
+      }
+    },
+    [spaceId, refreshSpaces, setSpaceId],
+  )
+
   const deleteSession = useCallback(async (id: string) => {
     if (!spaceId) return
     await fetch(`${SIDECAR_URL}/sessions/${id}${qsSpace(spaceId)}`, { method: 'DELETE' })
@@ -235,12 +292,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       spaces,
       refreshSpaces,
       createSpaceLibrary,
+      updateSpaceDisplayName,
+      deleteSpace,
       sessions,
       activeSessionId,
       setActiveSessionId,
       createSession,
       deleteSession,
       refreshSessions,
+      pinSession,
       openSpaceInNewWindow,
     }}>
       {children}

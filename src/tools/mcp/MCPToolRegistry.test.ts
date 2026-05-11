@@ -30,11 +30,16 @@ mock.module('@modelcontextprotocol/sdk/client', () => {
   };
 });
 
+let lastStdioTransportArgs: { command: string; args: string[] } | null = null
 mock.module('@modelcontextprotocol/sdk/client/stdio.js', () => {
   return {
-    StdioClientTransport: class {}
-  };
-});
+    StdioClientTransport: class {
+      constructor(opts: { command: string; args: string[] }) {
+        lastStdioTransportArgs = opts
+      }
+    },
+  }
+})
 
 describe('MCPToolRegistry (M4.L1)', () => {
   const registry = new DefaultMCPToolRegistry();
@@ -80,5 +85,16 @@ describe('MCPToolRegistry (M4.L1)', () => {
     
     await registry.disconnect('weather-server');
     expect(registry.findTool('get_weather')).toBeUndefined();
+  });
+
+  it('should append rootOverride to stdio spawn args', async () => {
+    lastStdioTransportArgs = null
+    const r = new DefaultMCPToolRegistry()
+    await r.connect(mockConfig, ['/tmp/lib-mount', '/other'])
+    expect(lastStdioTransportArgs).not.toBeNull()
+    expect(lastStdioTransportArgs!.command).toBe('node')
+    expect(lastStdioTransportArgs!.args).toEqual(['weather.js', '/tmp/lib-mount', '/other'])
+    await r.disconnectAll()
+    expect(r.findTool('get_weather')).toBeUndefined()
   });
 });

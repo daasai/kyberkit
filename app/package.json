@@ -26,9 +26,13 @@
     "@milkdown/react": "^7.20.0",
     "@milkdown/utils": "^7.20.0",
     "@tailwindcss/vite": "^4.2.4",
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "2",
+    "remark-gfm": "^4.0.1",
     "tailwindcss": "^4.2.4"
   },
   "devDependencies": {

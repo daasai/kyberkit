@@ -1,0 +1,48 @@
+@import 'tailwindcss';
+
+/* Junior brand — https://junior.so/press */
+@theme {
+  --font-display: 'Instrument Serif', ui-serif, Georgia, serif;
+  --font-body: 'Montserrat', ui-sans-serif, system-ui, sans-serif;
+
+  --color-j-bg: #1a2e1a;
+  --color-j-brand: #3a5426;
+  --color-j-accent: #7aab5a;
+  --color-j-cream: #faf9f6;
+  --color-j-muted: #6b6863;
+  --color-j-ink: #111111;
+
+  /* 非 Junior 品牌色：仅功能语义 */
+  --color-j-danger: #9b2335;
+  --color-j-danger-bg: #fdecef;
+  --color-j-warn: #8a5a00;
+  --color-j-warn-bg: #fff6e5;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-j-ink);
+  background: var(--color-j-cream);
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* 自定义滚动条（浅色区） */
+.proto-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.proto-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-j-muted) 35%, transparent);
+  border-radius: 9999px;
+}
