@@ -1,0 +1,8 @@
+#!/usr/bin/env bun
+// KyberKit CLI entry point
+import('../src/cli/init.js')
+  .then(m => m.run(process.argv.slice(2)))
+  .catch(err => {
+    console.error('[kyberkit] fatal:', err.message ?? err);
+    process.exit(1);
+  });

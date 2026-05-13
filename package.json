@@ -1,0 +1,45 @@
+{
+  "name": "kyberkit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "kyberkit": "bin/kyberkit"
+  },
+  "scripts": {
+    "test": "bun test ./src",
+    "test:live:sprint2": "KYBER_RUN_LIVE_TESTS=true bun test src/runtime/Sprint2Live.integration.test.ts",
+    "chat": "bun run bin/kyberkit chat",
+    "chat:no-tui": "bun run bin/kyberkit chat --no-tui",
+    "repl-test": "bun run scripts/repl-test.ts",
+    "stream-test": "bun run scripts/stream-test.ts",
+    "demo:sprint2": "bun run scripts/sprint2-workspace-demo.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.74",
+    "@ai-sdk/openai": "^3.0.58",
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ai": "^6.0.174",
+    "better-sqlite3": "^12.9.0",
+    "dotenv": "^17.4.2",
+    "gray-matter": "^4.0.3",
+    "ink": "^7.0.1",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5",
+    "react": "^19.2.5",
+    "xlsx": "^0.18.5",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6",
+    "zod-to-json-schema": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/react": "^19.2.14",
+    "bun-types": "latest",
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

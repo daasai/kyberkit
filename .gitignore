@@ -1,0 +1,31 @@
+# Dependency directories
+node_modules/
+bun.lockb
+bun.lock
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Kevin agent pack — local overrides (copy from kevin.env.example)
+agents/kevin/kevin.env
+
+# Project specific
+dist/
+build/
+coverage/
+
+references/
+
+# Local workspace state (Kevin / KyberKit SQLite, WAL)
+spaces/**/.kyberkit/
