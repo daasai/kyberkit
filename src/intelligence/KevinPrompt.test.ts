@@ -1,9 +1,30 @@
 import { expect, test, describe } from 'bun:test';
+import { existsSync } from 'fs';
 import { readFile, access } from 'fs/promises';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function findKkSearchRoot(): string {
+  let dir = __dirname;
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(dir, 'KK.md')) || existsSync(join(dir, 'spaces/default/KK.md'))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return join(__dirname, '../../');
+}
+
+const repoRoot = findKkSearchRoot();
+/** Monorepo `KK.md` at root, or bundled default under `spaces/default/`. */
+const kkCandidates = [join(repoRoot, 'KK.md'), join(repoRoot, 'spaces/default/KK.md')];
+const kkPath = kkCandidates.find((p) => existsSync(p)) ?? kkCandidates[0];
 
 describe('Kevin System Prompt Validation', () => {
-  const kkPath = join(process.cwd(), 'KK.md');
 
   test('KK.md file exists', async () => {
     // bun's access() resolves to null (not undefined)

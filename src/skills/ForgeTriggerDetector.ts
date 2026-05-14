@@ -1,6 +1,6 @@
 /**
  * Skill Forge 触发信号（Kevin v1.5 PRD §12.3.1）— 骨架实现。
- * 完整算法见 docs/specs/kevin1.5/skill-architecture.md / PRD TODO-B。
+ * 完整算法见 packages/kevin-docs/specs/kevin1.5/skill-architecture.md / PRD TODO-B。
  */
 
 export type ForgeTriggerKind =

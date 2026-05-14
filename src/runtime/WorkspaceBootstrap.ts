@@ -87,6 +87,7 @@ export async function ensureWorkspaceSeed(options: {
   await mkdir(join(userRoot, 'skills', 'example'), { recursive: true });
   await mkdir(join(userRoot, 'commands'), { recursive: true });
   await mkdir(join(userRoot, 'workspaces'), { recursive: true });
+  await mkdir(join(userRoot, 'data'), { recursive: true });
 
   const kkPath = join(userRoot, 'KK.md');
   if (!existsSync(kkPath)) {

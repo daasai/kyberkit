@@ -1,7 +1,7 @@
 /**
  * Request-scoped execution context for Kevin Rev3 (strategy A).
  * Sidecar constructs this after resolving space_id → library; passed into KyberRuntime.createSession.
- * See docs/specs/kevin1.5/kevin-v1.5-system-refactor-spec.md §8.1
+ * See packages/kevin-docs/specs/kevin1.5/kevin-v1.5-system-refactor-spec.md §8.1
  */
 
 export interface AgentExecutionContext {

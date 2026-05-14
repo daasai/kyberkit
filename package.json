@@ -1,19 +1,34 @@
 {
   "name": "kyberkit",
-  "version": "1.0.0",
+  "version": "2.0.0-alpha.1",
   "private": true,
   "type": "module",
   "bin": {
     "kyberkit": "bin/kyberkit"
   },
+  "exports": {
+    "./runtime/KyberRuntime.js": "./src/runtime/KyberRuntime.ts",
+    "./runtime/AgentSession.js": "./src/runtime/AgentSession.ts",
+    "./runtime/AgentExecutionContext.js": "./src/runtime/AgentExecutionContext.ts",
+    "./runtime/audit/AuditLogger.js": "./src/runtime/audit/AuditLogger.ts",
+    "./runtime/paths/PathResolver.js": "./src/runtime/paths/PathResolver.ts",
+    "./runtime/config/UserConfigStore.js": "./src/runtime/config/UserConfigStore.ts",
+    "./util/binaryFileExtract.js": "./src/util/binaryFileExtract.ts",
+    "./config/ConfigLoader.js": "./src/config/ConfigLoader.ts",
+    "./types/skill-suggestion.js": "./src/types/skill-suggestion.ts",
+    "./events/EventBus.js": "./src/events/EventBus.ts",
+    "./types/events.js": "./src/types/events.ts"
+  },
   "scripts": {
     "test": "bun test ./src",
-    "test:live:sprint2": "KYBER_RUN_LIVE_TESTS=true bun test src/runtime/Sprint2Live.integration.test.ts",
+    "test:live:sprint2": "KYBER_RUN_LIVE_TESTS=true bun test ./src/runtime/Sprint2Live.integration.test.ts",
+    "demo:sprint2": "bun run ./scripts/sprint2-workspace-demo.ts",
+    "repl-test": "bun run ./scripts/repl-test.ts",
+    "stream-test": "bun run ./scripts/stream-test.ts",
     "chat": "bun run bin/kyberkit chat",
     "chat:no-tui": "bun run bin/kyberkit chat --no-tui",
-    "repl-test": "bun run scripts/repl-test.ts",
-    "stream-test": "bun run scripts/stream-test.ts",
-    "demo:sprint2": "bun run scripts/sprint2-workspace-demo.ts"
+    "web:api": "bun run ./src/console-server/server.ts",
+    "web:smoke:api": "bun run ./scripts/web-console-smoke.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.74",
