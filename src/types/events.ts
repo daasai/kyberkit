@@ -3,8 +3,9 @@ import type { PermissionTag } from './permission.js';
 import type { StopReason } from './model.js';
 import type { MemoryCategory } from './memory.js';
 import type { ToolPermissionAudit } from './agent-events.js';
+import type { Kevin2Events } from './kevin2-events.js';
 
-export type KyberEvents = {
+type KyberEventsCore = {
   // Agent lifecycle events
   'agent.status_changed': { agentId: string; from: AgentStatus; to: AgentStatus };
   'agent.created': { agentId: string; definition: AgentDefinition };
@@ -188,3 +189,5 @@ export type KyberEvents = {
     receivedAt: number;
   };
 }
+
+export type KyberEvents = KyberEventsCore & Kevin2Events;

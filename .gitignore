@@ -29,3 +29,7 @@ references/
 
 # Local workspace state (Kevin / KyberKit SQLite, WAL)
 spaces/**/.kyberkit/
+
+# Harness / test scratch
+test-data-sessmem/
+*.bak

@@ -1,6 +1,6 @@
 /**
  * Kevin v1.5 — Tier 1/2/3 path constants & directory initialization.
- * See docs/specs/kevin1.5/tier-architecture.md
+ * See packages/kevin-docs/specs/kevin1.5/tier-architecture.md
  */
 
 import { homedir } from 'os'
@@ -168,9 +168,6 @@ export interface SpaceListEntry {
   label: string
   libraryId?: string
   mountPath?: string
-  connectorByzEnabled?: boolean
-  connectorByzAlias?: string
-  connectorByzDirId?: string
 }
 
 export interface SpaceLibraryBinding {
@@ -180,8 +177,9 @@ export interface SpaceLibraryBinding {
   displayName?: string
   connectorByzEnabled?: boolean
   connectorByzAlias?: string
-  connectorByzDirId?: string
   connectorSyncStatePath?: string
+  /** Kevin 2.0 onboarding: capability matrix + connector deferral (JSON-serializable object). */
+  workspaceSettings?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -248,16 +246,11 @@ export function upsertSpaceLibraryBinding(binding: SpaceLibraryBinding): void {
   if (binding.connectorByzAlias !== undefined) {
     next.connectorByzAlias = binding.connectorByzAlias
   }
-  if (binding.connectorByzDirId !== undefined) {
-    const d = binding.connectorByzDirId.trim()
-    if (!d) {
-      delete next.connectorByzDirId
-    } else {
-      next.connectorByzDirId = d
-    }
-  }
   if (binding.connectorSyncStatePath !== undefined) {
     next.connectorSyncStatePath = binding.connectorSyncStatePath
+  }
+  if (binding.workspaceSettings !== undefined) {
+    next.workspaceSettings = binding.workspaceSettings
   }
   const filtered = rows.filter((row) => row.spaceId !== next.spaceId && row.libraryId !== next.libraryId)
   filtered.push(next)
@@ -270,7 +263,6 @@ export function updateLibraryConnectorSettings(params: {
   patch: {
     connectorByzEnabled?: boolean
     connectorByzAlias?: string | null
-    connectorByzDirId?: string | null
     connectorSyncStatePath?: string | null
   }
 }): SpaceLibraryBinding | null {
@@ -295,13 +287,6 @@ export function updateLibraryConnectorSettings(params: {
       delete nextRow.connectorByzAlias
     } else {
       nextRow.connectorByzAlias = params.patch.connectorByzAlias.trim()
-    }
-  }
-  if (params.patch.connectorByzDirId !== undefined) {
-    if (params.patch.connectorByzDirId === null || params.patch.connectorByzDirId === '') {
-      delete nextRow.connectorByzDirId
-    } else {
-      nextRow.connectorByzDirId = params.patch.connectorByzDirId.trim()
     }
   }
   if (params.patch.connectorSyncStatePath !== undefined) {
@@ -370,9 +355,6 @@ export function listRegistrySpaces(): SpaceListEntry[] {
     label: row.displayName?.trim() || row.spaceId.slice(0, 8) + '…',
     libraryId: row.libraryId,
     mountPath: row.mountPath,
-    connectorByzEnabled: row.connectorByzEnabled,
-    connectorByzAlias: row.connectorByzAlias,
-    connectorByzDirId: typeof row.connectorByzDirId === 'string' ? row.connectorByzDirId : undefined,
   }))
 }
 
@@ -433,9 +415,6 @@ function toLibraryRefPath(libraryId: string, relPath: string): string {
 /**
  * Lists tree nodes under the Library mount for this Space (Rev3).
  * Requires a registry binding; no legacy ~/.kyberkit/spaces/.../docs fallback.
- *
- * Hidden entries: `walkTree` skips names starting with `.`, so `.kevin/` (cloud workspace mirrors)
- * never appears in the local Library tab.
  */
 export function listSpaceDocsTree(spaceId: string): SpaceDocTreeNode[] {
   const binding = resolveSpaceToLibrary(spaceId)
