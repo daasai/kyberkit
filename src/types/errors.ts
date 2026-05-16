@@ -94,6 +94,7 @@ export class ToolExecutionError extends KyberError {
   constructor(
     public readonly toolName: string,
     message: string,
+    public readonly is_retryable: boolean = false,
     cause?: Error,
   ) {
     super(`Tool "${toolName}" execution failed: ${message}`, cause);
