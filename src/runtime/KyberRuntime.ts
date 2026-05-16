@@ -56,21 +56,7 @@ import { TriggeredScheduler } from '../scheduler/TriggeredScheduler.js';
 import { ContractCommand } from '../commands/builtin/ContractCommand.js';
 import type { AgentProductDef } from '../types/agent-product.js';
 import { fileURLToPath, pathToFileURL } from 'url';
-
-/** Kevin UI: map colloquial 「文档库」 to the mounted Library root (shown in Environment cwd). */
-function kevinLibraryLexiconSection(libraryMountAbs: string): string {
-  const safePath = libraryMountAbs.replace(/\\/g, '/');
-  return [
-    '## Kevin UI — 「文档库」即本 Library',
-    '',
-    '在本 Kevin 会话中：',
-    '- 用户在界面里说的「**文档库**」、英文 **Library**、左侧文件树，均指当前 Space 已挂载的**本地文件夹**。下面「工作区 cwd」就是它的根目录。',
-    '- 当用户要求「把内容**写入文档库**」「保存到资料库」「落库」等，应使用 `read_file` / `write_file` 等工具，在该根目录下使用**相对路径**（如 `subdir/report.md` 或 `./report.md`）；必要时先用 `list_directory` 或 `list_allowed_directories`。',
-    '- **不要**把「文档库」联想为外置网盘、浏览器下载目录、或任何不在允许路径内的磁盘位置。',
-    '',
-    `**Library 根目录（绝对路径）**: \`${safePath}\``,
-  ].join('\n');
-}
+import type { ExecutionScope } from './ExecutionScope.js';
 
 export class KyberRuntime {
   private bus!: TypedEventBus<KyberEvents>;
@@ -439,21 +425,20 @@ export class KyberRuntime {
     let sessionMcpCleanup: (() => Promise<void>) | undefined
     if (opts.agentExecution) {
       const ctx = opts.agentExecution;
-      const absMount = resolve(ctx.libraryMountPath);
-      const absTech = resolve(ctx.libraryTechRoot);
+      // Use the generic fields from AgentExecutionContext (cwd = mount root, allowedRoots = sandbox roots).
+      const mountRoot = resolve(ctx.cwd);
       const effectivePermissions = this.resolvePermissions();
       const sessionSandbox = new PermissionSandbox({
         allowed: new Set(effectivePermissions.allowed as PermissionTag[]),
         denied: new Set(effectivePermissions.denied as PermissionTag[]),
-        // Kevin Rev3: per-session roots must follow current Library binding.
-        allowedPaths: [absMount, absTech],
+        allowedPaths: ctx.allowedRoots.map(p => resolve(p)),
         allowedDomains: effectivePermissions.allowedDomains,
       });
       const facade = this.tools as DefaultToolIntegrationFacade;
       const builtinsReg = new BuiltinToolRegistry(
-        createBuiltinTools(facade.shell, sessionSandbox, absMount),
+        createBuiltinTools(facade.shell, sessionSandbox, mountRoot),
       );
-      /** Kevin Rev3: per-session MCP stdio args get Library mount appended when `mcpRoots` is set. */
+      /** Per-session MCP stdio args get mount root appended when `mcpRoots` is set. */
       let mcpForSession: MCPToolRegistry = facade.mcp
       if (ctx.mcpRoots?.length) {
         const sessionMcp = new DefaultMCPToolRegistry()
@@ -475,18 +460,46 @@ export class KyberRuntime {
         facade.skills,
         builtinsReg,
       );
-      deps = { ...deps, tools: sessionTools, sandbox: sessionSandbox, executionCwd: absMount };
+      deps = { ...deps, tools: sessionTools, sandbox: sessionSandbox, executionCwd: mountRoot };
 
-      // Kevin v1.5 §12.5 — L1 progressive disclosure: append the Skill directory
-      // to this session's platformDirective, so the model sees (name, description)
-      // for every Skill visible to the current Space without paying for full bodies.
+      // L1 progressive disclosure: append the Skill directory to the session's platformDirective.
       const dir = ctx.skillDirectory?.trim();
       let pd = (deps.platformDirective ?? '').trim();
       if (dir) {
         pd = pd ? `${pd}\n\n${dir}` : dir;
       }
-      const libLex = kevinLibraryLexiconSection(absMount);
-      pd = pd ? `${pd}\n\n${libLex}` : libLex;
+      deps = { ...deps, platformDirective: pd };
+    }
+
+    if (opts.scope) {
+      const { workingDirectory, allowedPaths, focusedPaths, scopeHint } = opts.scope as ExecutionScope;
+      const effectivePermissions = this.resolvePermissions();
+      const sessionSandbox = new PermissionSandbox({
+        allowed: new Set(effectivePermissions.allowed as PermissionTag[]),
+        denied: new Set(effectivePermissions.denied as PermissionTag[]),
+        allowedPaths: allowedPaths.map(p => resolve(p)),
+        allowedDomains: effectivePermissions.allowedDomains,
+      });
+      const facade = this.tools as DefaultToolIntegrationFacade;
+      const builtinsReg = new BuiltinToolRegistry(
+        createBuiltinTools(facade.shell, sessionSandbox, workingDirectory),
+      );
+      const sessionTools = new DefaultToolIntegrationFacade(
+        facade.shell,
+        facade.mcp,
+        facade.skills,
+        builtinsReg,
+      );
+      deps = { ...deps, tools: sessionTools, sandbox: sessionSandbox, executionCwd: workingDirectory };
+
+      let pd = (deps.platformDirective ?? '').trim();
+      if (focusedPaths?.length) {
+        const focusSection = `## Focused context\nFiles: ${focusedPaths.join(', ')}`;
+        pd = pd ? `${pd}\n\n${focusSection}` : focusSection;
+      }
+      if (scopeHint) {
+        pd = pd ? `${pd}\n\n${scopeHint}` : scopeHint;
+      }
       deps = { ...deps, platformDirective: pd };
     }
 

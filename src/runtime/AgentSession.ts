@@ -25,6 +25,7 @@ import type { SkillSuggestionRunner } from '../skills/SkillSuggestionRunner.js';
 import type { LearningLoopMiddleware } from '../learning/LearningLoopMiddleware.js';
 import type { AssetRecord } from '../types/turn-summary.js';
 import type { AgentExecutionContext } from './AgentExecutionContext.js';
+import type { ExecutionScope } from './ExecutionScope.js';
 
 // ─── Public API Types ────────────────────────────────────────────────────────
 
@@ -69,6 +70,14 @@ export interface CreateSessionOptions {
    * When set, runtime forks sandbox and rebuilds builtin tools for this session only.
    */
   agentExecution?: AgentExecutionContext;
+
+  /**
+   * Generic execution scope for the session.
+   * When set, the runtime forks the sandbox to `allowedPaths`, sets `executionCwd` to
+   * `workingDirectory`, and injects `focusedPaths` / `scopeHint` into the system prompt.
+   * This is the Kevin-agnostic replacement for `agentExecution`.
+   */
+  scope?: ExecutionScope;
 }
 
 export interface ReliabilityBuildConfig {
