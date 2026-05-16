@@ -89,6 +89,8 @@ export async function run(argv: string[] = []): Promise<void> {
       return runInit(rest);
     case 'trajectory':
       return runTrajectoryCli(rest);
+    case 'eval':
+      return runEvalCli(rest);
     case 'chat':
     case undefined:
       return runChat(rest);
@@ -115,6 +117,7 @@ Commands:
   chat           Start the interactive REPL (default)
   init [name]    Scaffold a new KyberKit project
   trajectory     Export local trajectory DB (JSONL)
+  eval           Run eval harness tasks
 
 Options:
   --help, -h     Show this help
@@ -129,6 +132,12 @@ Chat options:
 
 Trajectory export:
   kyberkit trajectory export [--since 7d]
+
+Eval options:
+  --task <id>       Run a single task by ID
+  --filter <regex>  Filter tasks by ID pattern
+  --ci              Output JSON report to stdout (exit 1 if any failures)
+  --output <path>   Write JSON report to file
 `);
 }
 
@@ -343,6 +352,24 @@ async function runReadlineFallback(
   };
 
   prompt();
+}
+
+async function runEvalCli(args: string[]): Promise<void> {
+  const taskIdx = args.indexOf('--task');
+  const taskId = taskIdx >= 0 ? args[taskIdx + 1] : undefined;
+  const filterIdx = args.indexOf('--filter');
+  const filterPattern = filterIdx >= 0 ? args[filterIdx + 1] : undefined;
+  const ci = args.includes('--ci');
+  const outputIdx = args.indexOf('--output');
+  const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : undefined;
+
+  const { DefaultEvalRuntime } = await import('../eval/EvalRuntime.js');
+  const { buildEvalCommand } = await import('./eval.command.js');
+
+  const evalRuntime = new DefaultEvalRuntime();
+  const cmd = buildEvalCommand(evalRuntime);
+  const result = await cmd.run({ taskId, filterPattern, ci, outputPath });
+  process.exit(result.exitCode);
 }
 
 // ─── Workspace helpers ────────────────────────────────────────────────────────
