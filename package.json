@@ -19,7 +19,14 @@
     "./events/EventBus.js": "./src/events/EventBus.ts",
     "./types/events.js": "./src/types/events.ts",
     "./eval/EvalRuntime.js": "./src/eval/EvalRuntime.ts",
-    "./runtime/ExecutionScope.js": "./src/runtime/ExecutionScope.ts"
+    "./runtime/ExecutionScope.js": "./src/runtime/ExecutionScope.ts",
+    "./memory/WorkPatternStore.js": "./src/memory/WorkPatternStore.ts",
+    "./task/TaskRuntimeImpl.js": "./src/task/TaskRuntimeImpl.ts",
+    "./permission/PermissionSandbox.js": "./src/permission/PermissionSandbox.ts",
+    "./scale/CircuitBreaker.js": "./src/scale/CircuitBreaker.ts",
+    "./task/checkpointWithCircuits.js": "./src/task/checkpointWithCircuits.ts",
+    "./task/TaskSnapshot.js": "./src/task/TaskSnapshot.ts",
+    "./task/TaskRuntime.js": "./src/task/TaskRuntime.ts"
   },
   "scripts": {
     "test": "bun test ./src",

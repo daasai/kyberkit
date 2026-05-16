@@ -51,9 +51,9 @@ export class TaskRuntimeImpl implements TaskRuntime {
     await writeFile(this.config.storePath, JSON.stringify(this.store, null, 2), 'utf-8');
   }
 
-  async submit(spec: TaskSpec): Promise<TaskHandle> {
+  async submit(spec: TaskSpec & { id?: string }): Promise<TaskHandle> {
     await this.load();
-    const id = randomUUID();
+    const id = spec.id ?? randomUUID();
     const task: StoredTask = { id, spec, state: 'queued' };
     this.store.tasks[id] = task;
     await this.persist();
