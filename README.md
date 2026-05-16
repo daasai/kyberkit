@@ -1,4 +1,4 @@
-# KyberKit
+# KyberKit 2.0
 
 **KyberKit** 是 Kevin 使用的 **Agent 控制论底座 (Cybernetic Harness)**：为智能体提供权限沙箱、工具门面（Shell / MCP / Skills）、分层记忆、检查点、可观测性与资源预算等能力。本目录为 **npm workspace 包** `kyberkit`，可被同仓 `src-sidecar` 或其它包以 `workspace:*` 依赖。
 

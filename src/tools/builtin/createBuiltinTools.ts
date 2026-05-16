@@ -22,6 +22,37 @@ function perm(
   return r.allowed ? { behavior: 'allow' } : { behavior: 'deny', reason: r.reason ?? 'denied' };
 }
 
+/**
+ * Models often send `{ code }` or `{ path }` without `mode`. Zod discriminatedUnion
+ * requires `mode`; infer it before parse so inline scripts and .py file runs validate.
+ */
+function normalizePythonToolInput(raw: unknown): unknown {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const o = raw as Record<string, unknown>;
+  const mode = o.mode;
+  if (mode === 'inline' || mode === 'file') return raw;
+  if (typeof o.code === 'string') return { ...o, mode: 'inline' as const };
+  if (typeof o.path === 'string') return { ...o, mode: 'file' as const };
+  return raw;
+}
+
+const pythonToolInputSchema = z.preprocess(
+  normalizePythonToolInput,
+  z.discriminatedUnion('mode', [
+    z.object({
+      mode: z.literal('inline'),
+      code: z.string(),
+      cwd: z.string().optional(),
+    }),
+    z.object({
+      mode: z.literal('file'),
+      path: z.string(),
+      args: z.array(z.string()).optional(),
+      cwd: z.string().optional(),
+    }),
+  ]),
+);
+
 async function walkFiles(dir: string, out: string[]): Promise<void> {
   let entries: Awaited<ReturnType<typeof fs.readdir>>;
   try {
@@ -320,20 +351,8 @@ export function createBuiltinTools(
   const pythonTool = buildTool({
     name: 'python',
     descriptionText:
-      'Run Python 3 code (pandas/numpy friendly). Pass inline code OR a path to a .py file relative to cwd. For CSV analysis prefer pandas.read_csv.',
-    inputSchema: z.discriminatedUnion('mode', [
-      z.object({
-        mode: z.literal('inline'),
-        code: z.string(),
-        cwd: z.string().optional(),
-      }),
-      z.object({
-        mode: z.literal('file'),
-        path: z.string(),
-        args: z.array(z.string()).optional(),
-        cwd: z.string().optional(),
-      }),
-    ]),
+      'Run Python 3 code (pandas/numpy friendly). Use `code` for inline script (you may omit `mode`; it defaults to inline), or `path` for a .py file only (omit `mode` → file). Do not pass Excel/CSV paths as `path`; use inline code with pandas or read_file. For CSV prefer pandas.read_csv.',
+    inputSchema: pythonToolInputSchema,
     isConcurrencySafe: () => false,
     checkPermissions: async (_input, _ctx) => perm(sandbox, ['exec_shell', 'read_fs']),
     call: async (input, ctx) => {
@@ -355,6 +374,14 @@ export function createBuiltinTools(
         } finally {
           await fs.unlink(tmp).catch(() => {});
         }
+      }
+      const baseName = path.basename(input.path.trim()).toLowerCase();
+      if (!baseName.endsWith('.py')) {
+        return {
+          success: false,
+          error:
+            'python tool file mode only executes .py script paths. For Excel (.xlsx), CSV, or other data files use inline `code` with pandas (or read_file / bash), not `path`.',
+        };
       }
       const script = resolveSandboxedPath(input.path, workspaceCwd, sandbox);
       const args = (input.args ?? []).map((a) => JSON.stringify(a)).join(' ');
