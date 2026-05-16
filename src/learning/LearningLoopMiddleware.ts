@@ -3,6 +3,7 @@ import type { TypedEventBus } from '../events/EventBus.js';
 import type { KyberEvents } from '../types/events.js';
 import type { SkillSuggestionRunner } from '../skills/SkillSuggestionRunner.js';
 import type { EvolutionChangelog } from './EvolutionChangelog.js';
+import type { WorkPatternStore } from '../memory/WorkPatternStore.js';
 
 type ToolLogEntry = { name: string; input: unknown };
 
@@ -16,6 +17,15 @@ export interface LearningLoopDeps {
    * Defaults to 2.
    */
   readonly minToolCalls?: number;
+  /**
+   * Optional — when provided, task completion signals are persisted across
+   * sessions so the workspace can learn preferences over time (Pillar 5).
+   */
+  readonly workPatternStore?: WorkPatternStore;
+  /** Session identifier used when writing work-pattern signals. */
+  readonly sessionId?: string;
+  /** Broad work category (e.g. 'prd', 'analysis', 'general'). */
+  readonly workType?: string;
 }
 
 /**
@@ -97,6 +107,21 @@ export class LearningLoopMiddleware {
     if (this.deps.skillRunner) {
       this.deps.skillRunner.schedule(task, toolLog, '');
       skillSuggested = task.toolCalls >= 3; // mirrors SkillSuggestionRunner's guard
+    }
+
+    // 2b. Persist work-pattern signal for cross-session learning (Pillar 5)
+    if (this.deps.workPatternStore && this.deps.sessionId) {
+      await this.deps.workPatternStore.appendSignal(
+        {
+          signal_type: 'accepted',
+          signal_context: `Task ${task.taskId} completed — ${task.toolCalls} tool calls`,
+          strength: 0.7,
+        },
+        {
+          session_id: this.deps.sessionId,
+          work_type: this.deps.workType ?? 'general',
+        },
+      );
     }
 
     // 3. Emit learning_loop.evolved
