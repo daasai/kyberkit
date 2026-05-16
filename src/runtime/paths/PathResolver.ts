@@ -128,6 +128,33 @@ export function ensureKevinLayout(): void {
   }
 }
 
+// ── Phase 1 sidecar layout ────────────────────────────────────────────────────
+
+/**
+ * Root directory for the Kevin sidecar's persistent data.
+ * Override with KEVIN_SIDECAR_HOME env var (used in tests).
+ */
+export function kevinSidecarHome(): string {
+  const raw = process.env.KEVIN_SIDECAR_HOME?.trim()
+  if (raw) return raw
+  return join(homedir(), '.kevin', 'sidecar')
+}
+
+/**
+ * Ensures the Phase 1 sidecar directory layout exists.
+ * Creates ~/.kevin/sidecar/framework/ and adjacent directories.
+ */
+export function ensureKevinPhase1Layout(): void {
+  const dirs = [
+    kevinSidecarHome(),
+    join(kevinSidecarHome(), 'framework'),
+    join(kevinSidecarHome(), 'learning'),
+  ]
+  for (const d of dirs) {
+    mkdirSync(d, { recursive: true })
+  }
+}
+
 /** Ensures Tier 3 dirs for one Space (docs + skills + parents). */
 export function ensureSpaceTier(spaceId: string): void {
   mkdirSync(spaceDocsDir(spaceId), { recursive: true })

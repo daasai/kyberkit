@@ -17,7 +17,9 @@
     "./config/ConfigLoader.js": "./src/config/ConfigLoader.ts",
     "./types/skill-suggestion.js": "./src/types/skill-suggestion.ts",
     "./events/EventBus.js": "./src/events/EventBus.ts",
-    "./types/events.js": "./src/types/events.ts"
+    "./types/events.js": "./src/types/events.ts",
+    "./eval/EvalRuntime.js": "./src/eval/EvalRuntime.ts",
+    "./runtime/ExecutionScope.js": "./src/runtime/ExecutionScope.ts"
   },
   "scripts": {
     "test": "bun test ./src",
