@@ -130,7 +130,8 @@ Chat options:
   --log-file <path>     (no-tui) Append [phase] lines to a debug log file
   --reliability <mode>  real | inmemory (default: real)
 
-Trajectory export:
+Trajectory:
+  kyberkit trajectory tail [--last 20] [--no-follow]
   kyberkit trajectory export [--since 7d]
 
 Eval options:
@@ -150,8 +151,17 @@ function formatDurMs(ms: number): string {
 
 async function runTrajectoryCli(args: string[]): Promise<void> {
   const sub = args[0];
+  if (sub === 'tail') {
+    const rest = args.slice(1);
+    const lastIdx = rest.indexOf('--last');
+    const last = lastIdx >= 0 ? Number.parseInt(rest[lastIdx + 1] ?? '20', 10) : 20;
+    const follow = !rest.includes('--no-follow');
+    const { tailTaskEvents } = await import('./trajectory.command.js');
+    await tailTaskEvents({ last: Number.isFinite(last) ? last : 20, follow });
+    return;
+  }
   if (sub !== 'export') {
-    console.error('Usage: kyberkit trajectory export [--since 7d]');
+    console.error('Usage: kyberkit trajectory tail [--last 20] | export [--since 7d]');
     process.exit(1);
   }
   const rest = args.slice(1);
