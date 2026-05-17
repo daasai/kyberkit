@@ -5,6 +5,8 @@ import type { ExecutionScope } from '../runtime/ExecutionScope.js';
 
 export interface EvalContext {
   scope?: ExecutionScope;
+  /** Runtime task output when eval is triggered via KevinEvalRuntime.runForTask. */
+  taskOutput?: unknown;
 }
 
 export interface EvaluationTask {
