@@ -23,6 +23,7 @@
     "./memory/WorkPatternStore.js": "./src/memory/WorkPatternStore.ts",
     "./task/TaskRuntimeImpl.js": "./src/task/TaskRuntimeImpl.ts",
     "./permission/PermissionSandbox.js": "./src/permission/PermissionSandbox.ts",
+    "./permission/IPermissionSandbox.js": "./src/permission/IPermissionSandbox.ts",
     "./scale/CircuitBreaker.js": "./src/scale/CircuitBreaker.ts",
     "./task/checkpointWithCircuits.js": "./src/task/checkpointWithCircuits.ts",
     "./task/TaskSnapshot.js": "./src/task/TaskSnapshot.ts",
