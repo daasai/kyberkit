@@ -34,9 +34,13 @@ export class DefaultToolIntegrationFacade implements ToolIntegrationFacade {
 
   /**
    * Tools exposed to the model (builtins + MCP). Skills are injected via PromptAssembler only.
+   * Builtins win on name collisions — MCP filesystem servers often mirror builtin names.
    */
   listAll(): ToolDefinition[] {
-    return [...this.builtins.listTools(), ...this.mcp.listTools()];
+    const builtins = this.builtins.listTools();
+    const builtinNames = new Set(builtins.map((t) => t.name));
+    const mcpTools = this.mcp.listTools().filter((t) => !builtinNames.has(t.name));
+    return [...builtins, ...mcpTools];
   }
 
   listSkillMetas(): SkillMeta[] {

@@ -82,12 +82,41 @@ describe('AnthropicProvider (M5)', () => {
     expect(callArgs.system).toBe('You are a helpful assistant');
     expect(callArgs.tools).toBeDefined();
     expect(callArgs.tools[0].name).toBe('get_weather');
+    expect(callArgs.tools[0].input_schema.type).toBe('object');
+    expect(callArgs.tools[0].input_schema.properties?.city).toEqual({ type: 'string' });
 
     // Verify KyberKit abstraction response
     expect(response.role).toBe('assistant');
     expect(response.stopReason).toBe('end_turn');
     expect(response.usage.outputTokens).toBe(20);
     expect((response.content[0] as any).text).toBe('Hello KyberKit!');
+  });
+
+  it('maps parameterless tools with type object (DeepSeek-compatible)', async () => {
+    const mockTool: ToolDefinition = {
+      name: 'list_allowed_directories',
+      description: async () => 'List allowed directories',
+      inputSchema: z.object({}),
+      maxResultSizeChars: 1000,
+      call: async () => ({ success: true }),
+      isConcurrencySafe: () => true,
+      isReadOnly: () => true,
+      isEnabled: () => true,
+      checkPermissions: async () => ({ behavior: 'allow' }),
+    };
+
+    await provider.chat({
+      model: 'claude-haiku-35-20241022',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [mockTool],
+    });
+
+    const callArgs = mockCreateMessages.mock.calls.at(-1)?.[0];
+    expect(callArgs.tools[0].input_schema).toEqual({
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    });
   });
 
   it('should count tokens correctly', async () => {

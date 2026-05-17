@@ -54,6 +54,22 @@ describe('ToolIntegrationFacade (M4.Facade)', () => {
     expect(names).toEqual(['builtin_tool', 'mcp_tool']);
   });
 
+  it('dedupes MCP tools that share a builtin name', () => {
+    const builtins = new BuiltinToolRegistry([createMockTool('read_file')]);
+    const mcpWithOverlap: MCPToolRegistry = {
+      findTool: mock((name: string) => {
+        if (name === 'read_file') return createMockTool('read_file');
+        if (name === 'search') return createMockTool('search');
+        return undefined;
+      }),
+      listTools: mock(() => [createMockTool('read_file'), createMockTool('search')]),
+    };
+    const f = new DefaultToolIntegrationFacade(mockShell, mcpWithOverlap, mockSkills, builtins);
+    const names = f.listAll().map((t) => t.name).sort();
+    expect(names).toEqual(['read_file', 'search']);
+    expect(f.listAll().filter((t) => t.name === 'read_file')).toHaveLength(1);
+  });
+
   it('should resolve builtin before MCP and skill', () => {
     expect(facade.findTool('builtin_tool')?.name).toBe('builtin_tool');
     expect(facade.findTool('mcp_tool')?.name).toBe('mcp_tool');

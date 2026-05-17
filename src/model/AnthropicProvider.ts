@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { ModelProvider, ChatRequest, ChatResponse, StopReason, StreamEvent, ModelCapabilities, MessageContent, UsageInfo } from '../types/model.js';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { toolInputJsonSchema } from '../tools/toolInputJsonSchema.js';
 
 export class AnthropicProvider implements ModelProvider {
   readonly name = 'anthropic';
@@ -196,7 +196,7 @@ export class AnthropicProvider implements ModelProvider {
       return resolved.map((t) => ({
         name: t.name,
         description: t.description,
-        input_schema: zodToJsonSchema(t.inputSchema as any) as any,
+        input_schema: toolInputJsonSchema(t.inputSchema) as any,
       }));
     }
     const tools = request.tools;
@@ -204,7 +204,7 @@ export class AnthropicProvider implements ModelProvider {
     return tools.map((t) => ({
       name: t.name,
       description: t.description ? '(Dynamic desc enabled)' : '',
-      input_schema: zodToJsonSchema(t.inputSchema as any) as any,
+      input_schema: toolInputJsonSchema(t.inputSchema) as any,
     }));
   }
 
